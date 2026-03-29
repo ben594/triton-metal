@@ -51,12 +51,16 @@ class MetalBackend(BaseBackend):
         return mod
 
     def make_llir(self, src, metadata, options):
+        # TTCIR -> LLIR
         raise NotImplementedError("Make LLIR is not implemented for Metal backend yet")
 
     def make_dxil(self, src, metadata, options):
+        # LLIR -> DXIL
         raise NotImplementedError("Make DXIL is not implemented for Metal backend yet")
 
     def make_metallib(self, src, metadata, options):
+        # DXIL -> metallib
+        # TODO use Apple Shader Converter
         raise NotImplementedError("Make metallib is not implemented for Metal backend yet")
 
     def add_stages(self, stages: dict, options: object) -> None:
