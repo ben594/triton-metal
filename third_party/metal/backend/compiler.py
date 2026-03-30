@@ -1,4 +1,4 @@
-from triton._C.libtriton import cpu, ir, llvm, passes
+from triton._C.libtriton import ir, llvm, passes
 from triton.backends.compiler import BaseBackend, GPUTarget, Language
 
 
