@@ -70,10 +70,17 @@ class MetalUtils:
         return lib, pipeline, 0, 0, n_max_threads
 
     def unload_module(self):
-        raise NotImplementedError
+        # TODO verify if kernel is garbage collected
+        pass
 
     def get_device_properties(self, device):
-        raise NotImplementedError
+        # TODO verify these
+        return {
+            "max_shared_mem": self.device.maxThreadgroupMemoryLength(),
+            "multiprocessor_count": 0,  # n/a
+            "mem_clock_rate": 0,  # n/a
+            "mem_bus_width": 0,  # n/a
+        }
 
 
 class MetalLauncher:
