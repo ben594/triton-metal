@@ -44,6 +44,9 @@ class MSLKernel:
         return self.orig_ops
 
     def init_msl_ops(self):
+        # process function to extract arguments first, skip tt.func and builtin.module later
+        self.initial_process_func()
+
         # walk module
         ops = self._init_orig_ops()
         for i, op in enumerate(ops):
@@ -51,11 +54,22 @@ class MSLKernel:
             self.msl_ops.append(msl_op)
 
         return ops
-    
-    def process_tt_func(self):
+
+    def initial_process_func(self):
         # extract function name and attributes
-        
-        
+        mod = self.mod
+        func = mod.get_function(self.name)
+        num_args = func.get_num_args()
+        for i in range(num_args):
+            arg = func.args(i)
+            arg_type = str(arg.get_type())
+            arg_id = arg.id()
+            arg_val = MSLValue(f"%arg_{i}", arg_type, None, arg_id)
+            self.id_to_mslvalue[arg_id] = arg_val
+
+        print(
+            f"Processed function {self.name} with {num_args} arguments: {[str(func.args(i).get_type()) for i in range(num_args)]}"
+        )
 
     def process_op(self, op) -> MSLOp:
         name = op.get_name()
@@ -99,23 +113,7 @@ class MSLKernel:
 
     def process_arith_muli(self, op) -> MSLOp:
         op_type = "arith.muli"
-        assert op.get_num_operands() == 2
-        operands = []
-        for i in range(op.get_num_operands()):
-            operand = op.get_operand(i)
-            operand_id = operand.id()
-            # TODO should only operate on defined variables?
-            if operand_id in self.id_to_mslvalue:
-                operand_val = self.id_to_mslvalue[operand_id]
-            else:
-                raise ValueError(f"Operand with id {operand_id} not found in id_to_mslvalue mapping")
-            operands.append(operand_val)
-        assert op.get_num_results() == 1
-        result_type = str(op.get_result(0).get_type())
-        result_id = op.get_result(0).id()
-        result_val = MSLValue(self.request_new_var_name(), result_type, None, result_id)
-        self.id_to_mslvalue[result_id] = result_val
-        return MSLOp(op_type, operands, [result_val])
+        return self.generic_process_fn(op, op_type, num_operands=2, num_results=1)
 
     def process_tt_make_range(self, op) -> MSLOp:
         """
@@ -169,7 +167,30 @@ class MSLKernel:
 
     def process_arith_addi(self, op) -> MSLOp:
         op_type = "arith.addi"
-        assert op.get_num_operands() == 2
+        return self.generic_process_fn(op, op_type, num_operands=2, num_results=1)
+
+    def process_arith_cmpi(self, op) -> MSLOp:
+        op_type = "arith.cmpi"
+        return self.generic_process_fn(op, op_type, num_operands=2, num_results=1)
+
+    def process_tt_addptr(self, op) -> MSLOp:
+        op_type = "tt.addptr"
+        return self.generic_process_fn(op, op_type, num_operands=2, num_results=1)
+
+    def process_tt_load(self, op) -> MSLOp:
+        op_type = "tt.load"
+        return self.generic_process_fn(op, op_type, num_operands=2, num_results=1)
+
+    def process_arith_addf(self, op) -> MSLOp:
+        op_type = "arith.addf"
+        return self.generic_process_fn(op, op_type, num_operands=2, num_results=1)
+
+    def process_tt_store(self, op) -> MSLOp:
+        op_type = "tt.store"
+        return self.generic_process_fn(op, op_type, num_operands=3, num_results=0)
+
+    def generic_process_fn(self, op, op_type, num_operands: int, num_results: int) -> MSLOp:
+        assert op.get_num_operands() == num_operands
         operands = []
         for i in range(op.get_num_operands()):
             operand = op.get_operand(i)
@@ -180,12 +201,30 @@ class MSLKernel:
             else:
                 raise ValueError(f"Operand with id {operand_id} not found in id_to_mslvalue mapping")
             operands.append(operand_val)
-        assert op.get_num_results() == 1
-        result_type = str(op.get_result(0).get_type())
-        result_id = op.get_result(0).id()
-        result_val = MSLValue(self.request_new_var_name(), result_type, None, result_id)
-        self.id_to_mslvalue[result_id] = result_val
-        return MSLOp(op_type, operands, [result_val])
+        assert op.get_num_results() == num_results
+        results = []
+        for i in range(num_results):
+            result = op.get_result(i)
+            result_type = str(result.get_type())
+            result_id = result.id()
+            result_val = MSLValue(self.request_new_var_name(), result_type, None, result_id)
+            self.id_to_mslvalue[result_id] = result_val
+            results.append(result_val)
+        return MSLOp(op_type, operands, results)
+
+    def process_tt_return(self, op) -> MSLOp:
+        op_type = "tt.return"
+        assert op.get_num_operands() == 0
+        operands = []
+        assert op.get_num_results() == 0
+        results = []
+        return MSLOp(op_type, operands, results)
+
+    def process_tt_func(self, op) -> MSLOp:
+        pass
+
+    def process_builtin_module(self, op) -> MSLOp:
+        pass
 
     def process_unknown_op(self, op) -> MSLOp:
         raise NotImplementedError(f"Processing for op {op.get_name()} is not implemented yet")
