@@ -20,24 +20,24 @@ class MSLValue:
         self.made_by_make_range = made_by_make_range
         self.made_by_splat = made_by_splat
 
+    def is_ptr(self, type_str: str) -> bool:
+        return bool(re.match(self.PTR_REGEX, type_str))
+
     def get_msl_type(self) -> str:
-        if self.made_by_make_range:
-            # TODO change
-            return "uint"
-        elif self.made_by_splat:
-            # TODO change
-            return self.val_type
+        if self.made_by_make_range or self.made_by_splat:
+            raise NotImplementedError("Handling for values made by tt_make_range and tt_splat is not implemented yet")
         elif bool(re.match(r"tensor<", self.val_type)):
             print(f"Extracting element type from tensor type {self.val_type}")
             # extract type from tensor type, e.g. tensor<1024xi32> -> i32
             element_type = re.search(self.TENSOR_REGEX, self.val_type).group(1)
 
-            if element_type not in TTIR_TO_MSL_TYPE and bool(re.match(self.PTR_REGEX, element_type)):
-                # handle case where element type is pointer type, e.g. tensor<1024x!tt.ptr<i32>> -> !tt.ptr<i32> -> device i32 *
+            if element_type not in TTIR_TO_MSL_TYPE and self.is_ptr(element_type):
+                # handle case where element type is pointer type, e.g. tensor<1024x!tt.ptr<i32>> -> !tt.ptr<i32> -> device int *
                 element_type = re.search(self.PTR_REGEX, element_type).group(1)
+                return f"device {TTIR_TO_MSL_TYPE[element_type]} *"
 
             return TTIR_TO_MSL_TYPE[element_type]
-        elif bool(re.match(self.PTR_REGEX, self.val_type)):
+        elif self.is_ptr(self.val_type):
             # extract type from pointer type, e.g. !tt.ptr<i32> -> i32
             element_type = re.search(self.PTR_REGEX, self.val_type).group(1)
             return f"device {TTIR_TO_MSL_TYPE[element_type]} *"
@@ -102,9 +102,11 @@ class MSLKernel:
         self.msl_ops: list[MSLOp] = []
         self.id_to_mslvalue = {}  # map value id to MSLValue
         self.var_index = 0  # for generating unique variable names
+        self.kernel_args = []
+        self.kernel_name = mod.get_entry_func_name()
 
     def request_new_var_name(self) -> str:
-        name = f"%{self.var_index}"
+        name = f"v{self.var_index}"
         self.var_index += 1
         return name
 
@@ -137,8 +139,9 @@ class MSLKernel:
             arg = func.args(i)
             arg_type = str(arg.get_type())
             arg_id = arg.id()
-            arg_val = MSLValue(f"%arg_{i}", arg_type, None, arg_id)
+            arg_val = MSLValue(f"arg_{i}", arg_type, None, arg_id)
             self.id_to_mslvalue[arg_id] = arg_val
+            self.kernel_args.append(arg_val)
 
         print(
             f"Processed function {self.name} with {num_args} arguments: {[str(func.args(i).get_type()) for i in range(num_args)]}"
@@ -309,18 +312,38 @@ class MSLKernel:
 
     def generate_msl_code(self) -> str:
         msl_lines = []
+        msl_lines.append(self.get_msl_function_signature())
+        msl_lines.append("{")
         for msl_op in self.msl_ops:
             print(f"Generating MSL code for op: {msl_op}")
             msl_line = self.get_msl_line(msl_op)
-            msl_lines.append(msl_line)
+            if isinstance(msl_line, list):
+                # TODO replace with space?
+                msl_lines.extend([f"\t{line}" for line in msl_line])
+            else:
+                msl_lines.append(f"\t{msl_line}")
+        msl_lines.append("}")
         return "\n".join(msl_lines)
 
     def get_msl_line(self, msl_op: MSLOp) -> str:
         method_name = f"get_msl_{msl_op.op_type.replace('.', '_')}"
         handler = getattr(self, method_name, self.get_msl_unknown_op)
         msl_line = handler(msl_op)
-        print(msl_line)
         return msl_line
+
+    def get_msl_function_signature(self) -> str:
+        def get_func_signature_arg_type(arg: MSLValue) -> str:
+            if not arg.is_ptr(arg.val_type):
+                # TODO need to handle case where argument is not a scalar?
+                return f"device {arg.get_msl_type()} &"  # pass by reference for non-pointer types
+
+            # get_msl_type already adds "device" and "*" for pointer types
+            return arg.get_msl_type()
+
+        arg_str = ", ".join([f"{get_func_signature_arg_type(arg)} {arg.name}" for arg in self.kernel_args])
+        # TODO handle multiple dimensions
+        signature = f"kernel void {self.kernel_name}({arg_str}, uint thread_threadgroup_idx [[thread_position_in_threadgroup]], uint threadgroup_grid_idx [[threadgroup_position_in_grid]])"
+        return signature
 
     # methods to get MSL string for specific op
     def get_msl_arith_constant(self, msl_op: MSLOp) -> str:
@@ -383,26 +406,32 @@ class MSLKernel:
     def get_msl_tt_addptr(self, msl_op: MSLOp) -> str:
         return self.generic_msl_arith(msl_op, "+")
 
-    def get_msl_tt_load(self, msl_op: MSLOp) -> str:
+    def get_msl_tt_load(self, msl_op: MSLOp) -> list[str]:
         # handle mask
         mask_var = msl_op.operands[1].name
         load_var = msl_op.results[0].name
         ptr_var = msl_op.operands[0].name
         var_type = msl_op.results[0].get_msl_type()
-        msl_line = f"if ({mask_var}) {{\n    {var_type} {load_var} = *{ptr_var};\n}}"
-        return msl_line
+        # first declare, then load value if mask true
+        # TODO need to make sure there are no side effects if load_var is not initialized
+        msl_lines = [f"{var_type} {load_var};"]
+        msl_lines.append(f"if ({mask_var}) {{")
+        msl_lines.append(f"    {load_var} = *{ptr_var};")
+        msl_lines.append("}")
+        return msl_lines
 
     def get_msl_arith_addf(self, msl_op: MSLOp) -> str:
         return self.generic_msl_arith(msl_op, "+")
 
-    def get_msl_tt_store(self, msl_op: MSLOp) -> str:
+    def get_msl_tt_store(self, msl_op: MSLOp) -> list[str]:
         # handle mask
         mask_var = msl_op.operands[2].name
         ptr_var = msl_op.operands[0].name
         value_var = msl_op.operands[1].name
-        msl_line = f"if ({mask_var}) {{\n    *{ptr_var} = {value_var};\n}}"
-
-        return msl_line
+        msl_lines = [f"if ({mask_var}) {{"]
+        msl_lines.append(f"    *{ptr_var} = {value_var};")
+        msl_lines.append("}")
+        return msl_lines
 
     def get_msl_tt_return(self, msl_op: MSLOp) -> str:
         return "// return from function"
