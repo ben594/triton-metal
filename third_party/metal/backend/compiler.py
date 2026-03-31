@@ -1,4 +1,5 @@
 import functools
+import hashlib
 import os
 import subprocess
 import tempfile
@@ -15,7 +16,12 @@ def get_min_dot_size(target: GPUTarget):
 
 
 class MetalOptions(types.SimpleNamespace):
-    pass
+    sanitize_overflow: bool = True  # TODO copied from AMD, modify if needed
+
+    def hash(self):
+        # TODO copied from AMD, modify if needed
+        key = "_".join([f"{name}-{val}" for name, val in self.__dict__.items()])
+        return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
 
 class MetalBackend(BaseBackend):
@@ -46,9 +52,15 @@ class MetalBackend(BaseBackend):
     def make_msl(src, metadata, opt) -> str:
         mod = src
         # TODO check what is in metadata and opt
-        metadata["shared"] = 0  # TODO what to set this as?
+        metadata["shared"] = 0
+        metadata["global_scratch_size"] = 0
+        metadata["global_scratch_align"] = 1
+        metadata["profile_scratch_size"] = 0
+        metadata["profile_scratch_align"] = 1
         msl_kernel = MSLKernel(mod)
         msl_code: str = msl_kernel.generate_msl_code()
+        metadata["name"] = msl_kernel.name
+        metadata["num_warps"] = 4  # TODO just took 4 from an example, what should this be?
         return msl_code
 
     @staticmethod

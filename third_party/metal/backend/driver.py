@@ -196,7 +196,7 @@ class MetalDriver(DriverBase):
     def get_active_torch_device(self):
         import torch
 
-        return torch.device("mps")
+        return torch.device("mps", 0)
 
     def map_python_to_cpp_type(self, ty: str) -> str:
         return ty_to_cpp(ty)
