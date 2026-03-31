@@ -95,15 +95,14 @@ TTIR_TO_MSL_TYPE = {
 
 
 class MSLKernel:
-    def __init__(self, name: str, mod):
-        self.name = name
+    def __init__(self, mod):
         self.mod = mod
         self.orig_ops = []
         self.msl_ops: list[MSLOp] = []
         self.id_to_mslvalue = {}  # map value id to MSLValue
         self.var_index = 0  # for generating unique variable names
         self.kernel_args = []
-        self.kernel_name = mod.get_entry_func_name()
+        self.name = mod.get_entry_func_name()
 
     def request_new_var_name(self) -> str:
         name = f"v{self.var_index}"
@@ -114,7 +113,7 @@ class MSLKernel:
         self.mod.walk(lambda op: self.orig_ops.append(op))
         return self.orig_ops
 
-    def init_msl_ops(self) -> list[MSLOp]:
+    def _init_msl_ops(self) -> list[MSLOp]:
         # process function to extract arguments first, skip tt.func and builtin.module later
         self.initial_process_func()
 
@@ -311,6 +310,7 @@ class MSLKernel:
         raise NotImplementedError(f"Processing for op {op.get_name()} is not implemented yet")
 
     def generate_msl_code(self) -> str:
+        self._init_msl_ops()
         msl_lines = []
         msl_lines.append(self.get_msl_function_signature())
         msl_lines.append("{")
@@ -342,7 +342,7 @@ class MSLKernel:
 
         arg_str = ", ".join([f"{get_func_signature_arg_type(arg)} {arg.name}" for arg in self.kernel_args])
         # TODO handle multiple dimensions
-        signature = f"kernel void {self.kernel_name}({arg_str}, uint thread_threadgroup_idx [[thread_position_in_threadgroup]], uint threadgroup_grid_idx [[threadgroup_position_in_grid]])"
+        signature = f"kernel void {self.name}({arg_str}, uint thread_threadgroup_idx [[thread_position_in_threadgroup]], uint threadgroup_grid_idx [[threadgroup_position_in_grid]])"
         return signature
 
     # methods to get MSL string for specific op
