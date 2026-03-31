@@ -28,7 +28,52 @@ def ty_to_cpp(ty):
 
 
 class MetalUtils:
-    pass
+    def __new__(cls):
+        if not hasattr(cls, "instance"):
+            cls.instance = super(MetalUtils, cls).__new__(cls)
+        return cls.instance
+
+    def __init__(self):
+        # only init once
+        if hasattr(self, "_initialized"):
+            return
+
+        import Metal
+
+        self.device = Metal.MTLCreateSystemDefaultDevice()
+        self.command_queue = self.device.newCommandQueue()
+        self._initialized = True
+
+    def load_binary(self, kernel_name, metallib_bytes, shared_mem, device):
+        """
+        Load metallib binary
+        Inputs: name, kernel (bytes), metadata.shared, device
+        Needs to return: module, function, n_regs, n_spills, n_max_threads
+        """
+        import objc
+
+        data = objc.lookUpClass("NSData").dataWithBytes_length_(metallib_bytes, len(metallib_bytes))
+
+        lib, err = device.newLibraryWithData_error_(data, None)
+        assert lib is not None, f"failed to load metal lib: {err}"
+
+        func = lib.newFunctionWithName_(kernel_name)
+        assert func is not None, f"kernel '{kernel_name}' not found in lib"
+
+        pipeline, err = device.newComputePipelineStateWithFunction_error_(func, None)
+        assert pipeline is not None, f"failed to create pipeline state: {err}"
+
+        # TODO is this correct?
+        n_max_threads = pipeline.maxTotalThreadsPerThreadgroup()
+
+        # TODO verify can return 0 for n_regs and n_spills
+        return lib, pipeline, 0, 0, n_max_threads
+
+    def unload_module(self):
+        raise NotImplementedError
+
+    def get_device_properties(self, device):
+        raise NotImplementedError
 
 
 class MetalLauncher:
