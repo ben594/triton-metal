@@ -27,6 +27,26 @@ def ty_to_cpp(ty):
     }[ty]
 
 
+# Scalar type -> struct.pack format string
+_SCALAR_FMT = {
+    "i1": "b",
+    "i8": "b",
+    "i16": "h",
+    "i32": "i",
+    "i64": "q",
+    "u1": "B",
+    "u8": "B",
+    "u16": "H",
+    "u32": "I",
+    "u64": "Q",
+    "fp16": "e",
+    "bf16": "e",
+    "fp32": "f",
+    "f32": "f",
+    "fp64": "d",
+}
+
+
 class MetalUtils:
     def __new__(cls):
         if not hasattr(cls, "instance"):
@@ -54,13 +74,13 @@ class MetalUtils:
 
         data = objc.lookUpClass("NSData").dataWithBytes_length_(metallib_bytes, len(metallib_bytes))
 
-        lib, err = device.newLibraryWithData_error_(data, None)
+        lib, err = self.device.newLibraryWithData_error_(data, None)
         assert lib is not None, f"failed to load metal lib: {err}"
 
         func = lib.newFunctionWithName_(kernel_name)
         assert func is not None, f"kernel '{kernel_name}' not found in lib"
 
-        pipeline, err = device.newComputePipelineStateWithFunction_error_(func, None)
+        pipeline, err = self.device.newComputePipelineStateWithFunction_error_(func, None)
         assert pipeline is not None, f"failed to create pipeline state: {err}"
 
         # TODO is this correct?
@@ -84,7 +104,68 @@ class MetalUtils:
 
 
 class MetalLauncher:
-    pass
+    def __init__(self, src, metadata):
+        self.constants = src.constants if hasattr(src, "constants") else {}
+        self.signature = src.signature
+        self.num_warps = metadata.num_warps
+        self.warp_size = 32  # Apple GPU SIMD group size
+
+    def __call__(
+        self,
+        gridX,
+        gridY,
+        gridZ,
+        stream,
+        function,  # func returned in load_binary
+        kernel_metadata,  # packed_metadata from backend pack_metadata
+        launch_metadata,
+        launch_enter_hook,
+        launch_exit_hook,
+        *args,  # contains caller args
+    ):
+        import Metal
+
+        if launch_enter_hook is not None:
+            raise NotImplementedError("Launch enter hook not implemented for metal backend")
+
+        # stream is MTLCommandQueue, function is MTLComputePipelineState
+        cmd_buf = stream.commandBuffer()
+        encoder = cmd_buf.computeCommandEncoder()
+        encoder.setComputePipelineState_(function)
+
+        signature_types = list(self.signature.values())
+        metal_idx = 0
+        for arg, ty in zip(args, signature_types):
+            if ty == "constexpr":
+                # skip constexpr args
+                continue
+            if ty[0] == "*":
+                import torch
+                import objc
+
+                assert isinstance(arg, torch.Tensor), f"expected torch tensor for ptr arg, got {type(arg)}"
+                assert arg.device.type == "mps", f"expected mps tensor, got {arg.device}"
+                assert arg.is_contiguous(), "metal backend requires contiguous tensors"
+                buf = objc.objc_object(c_void_p=arg.storage().data_ptr())
+                encoder.setBuffer_offset_atIndex_(buf, 0, metal_idx)
+            else:
+                fmt = _SCALAR_FMT.get(ty)
+                assert fmt is not None, f"scalar type {ty} not found"
+                packed = struct.pack(fmt, arg)
+                encoder.setBytes_length_atIndex_(packed, len(packed), metal_idx)
+            metal_idx += 1
+
+        threads_per_tg = Metal.MTLSizeMake(self.num_warps * self.warp_size, 1, 1)
+        threadgroups = Metal.MTLSizeMake(gridX, gridY, gridZ)
+        encoder.dispatchThreadgroups_threadsPerThreadgroup_(threadgroups, threads_per_tg)
+
+        encoder.endEncoding()
+        cmd_buf.commit()
+        # TODO block for now
+        cmd_buf.waitUntilCompleted()
+
+        if launch_exit_hook is not None:
+            raise NotImplementedError("Launch exit hook not implemented for metal backend")
 
 
 class MetalDriver(DriverBase):
@@ -133,7 +214,7 @@ class MetalDriver(DriverBase):
         pass
 
     def _get_current_stream(self, device):
-        pass
+        return self.utils.command_queue
 
     def get_empty_cache_for_benchmark(self):
         import torch

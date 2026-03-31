@@ -1,8 +1,8 @@
-from dataclasses import dataclass
 import functools
 import os
 import subprocess
 import tempfile
+import types
 
 from triton._C.libtriton import ir, passes
 from triton.backends.compiler import BaseBackend, GPUTarget, Language
@@ -14,9 +14,7 @@ def get_min_dot_size(target: GPUTarget):
     return lambda lhs_type, rhs_type: (1, 1, 1)
 
 
-@dataclass(frozen=True)
-class MetalOptions:
-    # TODO add options for metal as needed
+class MetalOptions(types.SimpleNamespace):
     pass
 
 
@@ -48,6 +46,7 @@ class MetalBackend(BaseBackend):
     def make_msl(src, metadata, opt) -> str:
         mod = src
         # TODO check what is in metadata and opt
+        metadata["shared"] = 0  # TODO what to set this as?
         msl_kernel = MSLKernel(mod)
         msl_code: str = msl_kernel.generate_msl_code()
         return msl_code
@@ -82,11 +81,7 @@ class MetalBackend(BaseBackend):
         return f"{self.target}"
 
     def parse_options(self, options: dict) -> MetalOptions:
-        args = {k: options[k] for k in MetalOptions.__dataclass_fields__.keys() if k in options and options[k] is not None}
-        unsupported = sorted(k for k, v in options.items() if k not in MetalOptions.__dataclass_fields__ and v is not None)
-        if unsupported:
-            raise ValueError(f"Unsupported Metal backend option(s): {', '.join(unsupported)}")
-        return MetalOptions(**args)
+        return MetalOptions(**options)
 
     def pack_metadata(self, metadata):
         # TODO modify if needed
