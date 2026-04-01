@@ -2,6 +2,12 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 include_directories(${CMAKE_CURRENT_BINARY_DIR}/include)
 
 if(TRITON_BUILD_PYTHON_MODULE)
+  add_triton_plugin(TritonMetal ${CMAKE_CURRENT_SOURCE_DIR}/backend/dummy.mm)
+  target_link_libraries(TritonMetal PRIVATE
+    Python3::Module
+    pybind11::headers
+  )
+
   # Find torch paths for the standalone ATen extension
   execute_process(
     COMMAND ${Python3_EXECUTABLE} -c

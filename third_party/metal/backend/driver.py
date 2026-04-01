@@ -148,12 +148,16 @@ class MetalLauncher:
                 import torch
                 import objc
 
+                from triton._C import _metal_buffer
                 assert isinstance(arg, torch.Tensor), f"expected torch tensor for ptr arg, got {type(arg)}"
                 assert arg.device.type == "mps", f"expected mps tensor, got {arg.device}"
                 assert arg.is_contiguous(), "metal backend requires contiguous tensors"
+                # raw_ptr = _metal_buffer.get_mtl_buffer(arg)
+                torch.mps.synchronize()
                 raw_ptr = arg.storage().data_ptr()
-                assert raw_ptr != 0, f"MPS tensor storage returned null pointer for arg {metal_idx}"
-                print(f"[metal] ptr arg {metal_idx}: storage data_ptr = {hex(raw_ptr)}")
+                print(f"raw_ptr: {raw_ptr}")
+                print(arg.storage().data_ptr())
+                assert raw_ptr != 0, f"MPS tensor returned null MTLBuffer for arg {metal_idx}"
                 buf = objc.objc_object(c_void_p=raw_ptr)
                 encoder.setBuffer_offset_atIndex_(buf, 0, metal_idx)
             else:
