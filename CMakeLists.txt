@@ -308,6 +308,9 @@ if(TRITON_BUILD_PYTHON_MODULE)
     add_subdirectory(third_party/${CODEGEN_BACKEND})
   endforeach()
 
+  # don't include in CODEGEN_BACKEND since extension built for metal backend is separate from libtriton
+  add_subdirectory(third_party/metal)
+
   if (TRITON_BUILD_PROTON)
     add_subdirectory(third_party/proton)
   endif()
