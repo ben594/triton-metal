@@ -1,4 +1,6 @@
+import os
 import struct
+import tempfile
 import functools
 import triton
 from triton.backends.compiler import GPUTarget
@@ -70,24 +72,27 @@ class MetalUtils:
         Inputs: name, kernel (bytes), metadata.shared, device
         Needs to return: module, function, n_regs, n_spills, n_max_threads
         """
-        import objc
+        from Foundation import NSURL
 
-        data = objc.lookUpClass("NSData").dataWithBytes_length_(metallib_bytes, len(metallib_bytes))
+        with tempfile.NamedTemporaryFile(suffix=".metallib", delete=False) as f:
+            f.write(metallib_bytes)
+            tmp_path = f.name
 
-        lib, err = self.device.newLibraryWithData_error_(data, None)
-        assert lib is not None, f"failed to load metal lib: {err}"
+        try:
+            url = NSURL.fileURLWithPath_(tmp_path)
+            lib, err = self.device.newLibraryWithURL_error_(url, None)
+            assert lib is not None, f"failed to load metal lib: {err}"
 
-        func = lib.newFunctionWithName_(kernel_name)
-        assert func is not None, f"kernel '{kernel_name}' not found in lib"
+            func = lib.newFunctionWithName_(kernel_name)
+            assert func is not None, f"kernel '{kernel_name}' not found in lib"
 
-        pipeline, err = self.device.newComputePipelineStateWithFunction_error_(func, None)
-        assert pipeline is not None, f"failed to create pipeline state: {err}"
+            pipeline, err = self.device.newComputePipelineStateWithFunction_error_(func, None)
+            assert pipeline is not None, f"failed to create pipeline state: {err}"
 
-        # TODO is this correct?
-        n_max_threads = pipeline.maxTotalThreadsPerThreadgroup()
-
-        # TODO verify can return 0 for n_regs and n_spills
-        return lib, pipeline, 0, 0, n_max_threads
+            n_max_threads = pipeline.maxTotalThreadsPerThreadgroup()
+            return lib, pipeline, 0, 0, n_max_threads
+        finally:
+            os.unlink(tmp_path)
 
     def unload_module(self):
         # TODO verify if kernel is garbage collected
@@ -126,7 +131,7 @@ class MetalLauncher:
         import Metal
 
         if launch_enter_hook is not None:
-            raise NotImplementedError("Launch enter hook not implemented for metal backend")
+            launch_enter_hook(launch_metadata)
 
         # stream is MTLCommandQueue, function is MTLComputePipelineState
         cmd_buf = stream.commandBuffer()
@@ -146,13 +151,20 @@ class MetalLauncher:
                 assert isinstance(arg, torch.Tensor), f"expected torch tensor for ptr arg, got {type(arg)}"
                 assert arg.device.type == "mps", f"expected mps tensor, got {arg.device}"
                 assert arg.is_contiguous(), "metal backend requires contiguous tensors"
-                buf = objc.objc_object(c_void_p=arg.storage().data_ptr())
+                raw_ptr = arg.storage().data_ptr()
+                assert raw_ptr != 0, f"MPS tensor storage returned null pointer for arg {metal_idx}"
+                print(f"[metal] ptr arg {metal_idx}: storage data_ptr = {hex(raw_ptr)}")
+                buf = objc.objc_object(c_void_p=raw_ptr)
                 encoder.setBuffer_offset_atIndex_(buf, 0, metal_idx)
             else:
                 fmt = _SCALAR_FMT.get(ty)
                 assert fmt is not None, f"scalar type {ty} not found"
                 packed = struct.pack(fmt, arg)
-                encoder.setBytes_length_atIndex_(packed, len(packed), metal_idx)
+                import Metal
+                device = triton.runtime.driver.active.utils.device
+                buf = device.newBufferWithBytes_length_options_(
+                    packed, len(packed), Metal.MTLResourceStorageModeShared)
+                encoder.setBuffer_offset_atIndex_(buf, 0, metal_idx)
             metal_idx += 1
 
         threads_per_tg = Metal.MTLSizeMake(self.num_warps * self.warp_size, 1, 1)
@@ -161,11 +173,12 @@ class MetalLauncher:
 
         encoder.endEncoding()
         cmd_buf.commit()
-        # TODO block for now
         cmd_buf.waitUntilCompleted()
+        if cmd_buf.error():
+            raise RuntimeError(f"Metal command buffer error: {cmd_buf.error()}")
 
         if launch_exit_hook is not None:
-            raise NotImplementedError("Launch exit hook not implemented for metal backend")
+            launch_exit_hook(launch_metadata)
 
 
 class MetalDriver(DriverBase):
