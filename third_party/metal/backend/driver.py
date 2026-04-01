@@ -1,8 +1,13 @@
+import functools
 import os
 import struct
 import tempfile
-import functools
+
+import Metal
+import objc
+import torch
 import triton
+from triton._C import _metal_buffer
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import DriverBase
 
@@ -60,11 +65,12 @@ class MetalUtils:
         if hasattr(self, "_initialized"):
             return
 
-        import Metal
-
         self.device = Metal.MTLCreateSystemDefaultDevice()
-        self.command_queue = self.device.newCommandQueue()
+        self.command_queue = self.get_cmd_buf()
         self._initialized = True
+
+    def get_cmd_buf(self):
+        return objc.objc_object(c_void_p=_metal_buffer.get_command_buffer())
 
     def load_binary(self, kernel_name, metallib_bytes, shared_mem, device):
         """
@@ -128,13 +134,11 @@ class MetalLauncher:
         launch_exit_hook,
         *args,  # contains caller args
     ):
-        import Metal
-
         if launch_enter_hook is not None:
             launch_enter_hook(launch_metadata)
 
         # stream is MTLCommandQueue, function is MTLComputePipelineState
-        cmd_buf = stream.commandBuffer()
+        cmd_buf = stream
         encoder = cmd_buf.computeCommandEncoder()
         encoder.setComputePipelineState_(function)
 
@@ -145,10 +149,6 @@ class MetalLauncher:
                 # skip constexpr args
                 continue
             if ty[0] == "*":
-                import torch
-                import objc
-
-                from triton._C import _metal_buffer
                 assert isinstance(arg, torch.Tensor), f"expected torch tensor for ptr arg, got {type(arg)}"
                 assert arg.device.type == "mps", f"expected mps tensor, got {arg.device}"
                 assert arg.is_contiguous(), "metal backend requires contiguous tensors"
@@ -164,10 +164,8 @@ class MetalLauncher:
                 fmt = _SCALAR_FMT.get(ty)
                 assert fmt is not None, f"scalar type {ty} not found"
                 packed = struct.pack(fmt, arg)
-                import Metal
                 device = triton.runtime.driver.active.utils.device
-                buf = device.newBufferWithBytes_length_options_(
-                    packed, len(packed), Metal.MTLResourceStorageModeShared)
+                buf = device.newBufferWithBytes_length_options_(packed, len(packed), Metal.MTLResourceStorageModeShared)
                 encoder.setBuffer_offset_atIndex_(buf, 0, metal_idx)
             metal_idx += 1
 
@@ -243,3 +241,7 @@ class MetalDriver(DriverBase):
     def clear_cache(self, cache):
         # TODO copied from other backends, modify if needed
         cache.zero_()
+
+    def get_device_interface(self):
+        import torch
+        return torch.mps
