@@ -7,6 +7,7 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
+#include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
 #include "triton/Dialect/TritonNvidiaGPU/IR/Dialect.h"
 
@@ -69,6 +70,31 @@ struct ConvertTritonMetalGPUToLLVM
 
     mlir::LowerToLLVMOptions option(context);
     option.overrideIndexBitwidth(32);
+
+    TritonGPUToLLVMTypeConverter typeConverter(context, option, targetInfo);
+    TritonLLVMConversionTarget convTarget(*context);
+
+    // TODO skip shared memory for now just to get vector add example working
+
+    // lower functions
+    {
+      TritonLLVMFunctionConversionTarget funcTarget(*context);
+      RewritePatternSet funcPatterns(context);
+      mlir::triton::metal::populateFuncOpConversionPattern(
+          typeConverter, funcPatterns, targetInfo, patternBenefitDefault);
+      mlir::cf::populateControlFlowToLLVMConversionPatterns(typeConverter,
+                                                            funcPatterns);
+      if (failed(
+              applyPartialConversion(mod, funcTarget, std::move(funcPatterns))))
+        return signalPassFailure();
+    }
+    RewritePatternSet patterns(context);
+    mlir::triton::populateControlFlowOpToLLVMPattern(
+        typeConverter, patterns, targetInfo, patternBenefitDefault);
+
+    if (failed(applyPartialConversion(mod, convTarget, std::move(patterns)))) {
+      return signalPassFailure();
+    }
   }
 };
 
