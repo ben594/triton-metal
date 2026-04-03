@@ -5,6 +5,7 @@ include "mlir/Pass/PassBase.td"
 
 def ConvertTritonMetalGPUToLLVM : Pass<"convert-triton-metalgpu-to-llvm", "mlir::ModuleOp"> {
     let summary = "Convert TritonGPU to LLVM";
+    let constructor = "mlir::triton::createConvertTritonMetalGPUToLLVMPass(\"\")";
 
     let dependentDialects = ["mlir::arith::ArithDialect",
                              "mlir::math::MathDialect",
