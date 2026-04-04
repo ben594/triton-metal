@@ -89,8 +89,17 @@ struct ConvertTritonMetalGPUToLLVM
         return signalPassFailure();
     }
     RewritePatternSet patterns(context);
-    mlir::triton::populateControlFlowOpToLLVMPattern(
-        typeConverter, patterns, targetInfo, patternBenefitDefault);
+    int benefit = patternBenefitPrioritizeOverLLVMConversions;
+
+    mlir::triton::populateMakeRangeOpToLLVMPattern(typeConverter, targetInfo,
+                                                   patterns, benefit);
+
+    mlir::triton::populateControlFlowOpToLLVMPattern(typeConverter, patterns,
+                                                     targetInfo, benefit);
+
+    // this handles program id
+    mlir::triton::populateSPMDOpToLLVMPattern(typeConverter, patterns,
+                                              targetInfo, benefit);
 
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns)))) {
       return signalPassFailure();

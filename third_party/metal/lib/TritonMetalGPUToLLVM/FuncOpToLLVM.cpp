@@ -32,6 +32,10 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
 
       // AIR passes thread/group IDs as extra i32 params to kernel
       auto i32Type = IntegerType::get(ctx, 32);
+
+      SmallVector<DictionaryAttr> argAttrs;
+      newFuncOp.getAllArgAttrs(argAttrs);
+
       auto llvmFuncType = newFuncOp.getFunctionType();
       SmallVector<Type> params(llvmFuncType.getParams());
       params.push_back(i32Type);
@@ -45,10 +49,6 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
       auto loc = funcOp.getLoc();
       entryBlock.addArgument(i32Type, loc);
       entryBlock.addArgument(i32Type, loc);
-
-      // update arg attrs
-      SmallVector<DictionaryAttr> argAttrs;
-      newFuncOp.getAllArgAttrs(argAttrs);
       auto noundef =
           rewriter.getNamedAttr("llvm.noundef", rewriter.getUnitAttr());
       auto argAttr = DictionaryAttr::get(ctx, {noundef});

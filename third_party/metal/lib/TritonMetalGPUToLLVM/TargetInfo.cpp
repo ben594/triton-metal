@@ -1,4 +1,6 @@
 #include "TargetInfo.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/Support/ErrorHandling.h"
 
 namespace mlir::triton::metal {
@@ -6,7 +8,9 @@ namespace mlir::triton::metal {
 bool TargetInfo::supportMaximumMinimum() const { return true; }
 
 Value TargetInfo::getClusterCTAId(RewriterBase &rewriter, Location loc) const {
-  llvm_unreachable("not implemented");
+  if (triton::gpu::lookupNumCTAs(&rewriter.getInsertionBlock()->front()) == 1)
+    return arith::ConstantIntOp::create(rewriter, loc, 0, 32);
+  llvm_unreachable("getClusterCTAId not implemented for CTA > 1");
 }
 
 Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
@@ -66,7 +70,14 @@ Value TargetInfo::permute(RewriterBase &rewriter, Location loc, Value a,
 
 Value TargetInfo::programId(RewriterBase &rewriter, Location loc,
                             ModuleOp moduleOp, ProgramIDDim axis) const {
-  llvm_unreachable("not implemented");
+  auto func = rewriter.getInsertionBlock()
+                  ->getParent()
+                  ->getParentOfType<LLVM::LLVMFuncOp>();
+  unsigned numArgs = func.getNumArguments();
+  if (axis == ProgramIDDim::X) {
+    return func.getArgument(numArgs - 1);
+  }
+  llvm_unreachable("Only X axis supported for now");
 }
 
 bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
