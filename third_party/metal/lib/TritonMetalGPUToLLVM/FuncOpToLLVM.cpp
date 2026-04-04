@@ -29,6 +29,32 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
 
     if (triton::isKernel(funcOp)) {
       newFuncOp.setLinkage(LLVM::Linkage::External);
+
+      // AIR passes thread/group IDs as extra i32 params to kernel
+      auto i32Type = IntegerType::get(ctx, 32);
+      auto llvmFuncType = newFuncOp.getFunctionType();
+      SmallVector<Type> params(llvmFuncType.getParams());
+      params.push_back(i32Type);
+      params.push_back(i32Type);
+      newFuncOp.setFunctionType(
+          LLVM::LLVMFunctionType::get(llvmFuncType.getReturnType(), params));
+
+      // first entry block receives args from function params
+      // so need to add additional params to first entry block
+      Block &entryBlock = newFuncOp.getBody().front();
+      auto loc = funcOp.getLoc();
+      entryBlock.addArgument(i32Type, loc);
+      entryBlock.addArgument(i32Type, loc);
+
+      // update arg attrs
+      SmallVector<DictionaryAttr> argAttrs;
+      newFuncOp.getAllArgAttrs(argAttrs);
+      auto noundef =
+          rewriter.getNamedAttr("llvm.noundef", rewriter.getUnitAttr());
+      auto argAttr = DictionaryAttr::get(ctx, {noundef});
+      argAttrs.push_back(argAttr);
+      argAttrs.push_back(argAttr);
+      newFuncOp.setAllArgAttrs(argAttrs);
     } else {
       newFuncOp.setPassthroughAttr(
           ArrayAttr::get(ctx, rewriter.getStringAttr("noinline")));
