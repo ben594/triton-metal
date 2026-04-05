@@ -45,10 +45,10 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
 
       // first entry block receives args from function params
       // so need to add additional params to first entry block
-      Block &entryBlock = newFuncOp.getBody().front();
+      auto &region = newFuncOp.getBody();
       auto loc = funcOp.getLoc();
-      entryBlock.addArgument(i32Type, loc);
-      entryBlock.addArgument(i32Type, loc);
+      region.addArgument(i32Type, loc);
+      region.addArgument(i32Type, loc);
       auto noundef =
           rewriter.getNamedAttr("llvm.noundef", rewriter.getUnitAttr());
       auto argAttr = DictionaryAttr::get(ctx, {noundef});
