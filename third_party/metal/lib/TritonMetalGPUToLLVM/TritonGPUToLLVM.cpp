@@ -1,8 +1,11 @@
+#include "PatternTritonGPUOpToLLVM.h"
 #include "TargetInfo.h"
 #include "TritonMetalGPUToLLVM/Passes.h"
 #include "metal/lib/TritonMetalGPUToLLVM/PatternTritonGPUOpToLLVM.h"
+#include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
 #include "mlir/Conversion/LLVMCommon/LoweringOptions.h"
+#include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Transforms/DialectConversion.h"
@@ -88,8 +91,14 @@ struct ConvertTritonMetalGPUToLLVM
               applyPartialConversion(mod, funcTarget, std::move(funcPatterns))))
         return signalPassFailure();
     }
+
+    ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
+
     RewritePatternSet patterns(context);
     int benefit = patternBenefitPrioritizeOverLLVMConversions;
+
+    metal::populateElementwiseOpToLLVMPatterns(
+        typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
 
     mlir::triton::populateMakeRangeOpToLLVMPattern(typeConverter, targetInfo,
                                                    patterns, benefit);
@@ -100,6 +109,9 @@ struct ConvertTritonMetalGPUToLLVM
     // this handles program id
     mlir::triton::populateSPMDOpToLLVMPattern(typeConverter, patterns,
                                               targetInfo, benefit);
+
+    mlir::arith::populateArithToLLVMConversionPatterns(typeConverter, patterns);
+    mlir::populateMathToLLVMConversionPatterns(typeConverter, patterns);
 
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns)))) {
       return signalPassFailure();
