@@ -10,7 +10,6 @@ from typing import Optional, Tuple
 from triton import knobs
 from triton._C.libtriton import ir, llvm, metal, passes
 from triton.backends.compiler import BaseBackend, GPUTarget, Language
-from triton.backends.metal.msl_generator import MSLKernel
 
 
 def get_min_dot_size(target: GPUTarget):
@@ -105,8 +104,17 @@ class MetalBackend(BaseBackend):
         # LLVM-IR (MLIR) -> LLVM-IR (LLVM)
         llvm.init_targets()
         context = llvm.context()
-        # print("MOD\n", mod)
         llvm_mod = llvm.to_module(mod, context)
+
+        # TODO don't hardcode
+        llvm_mod.set_target_triple("air64-apple-macosx15.0.0")
+        llvm_mod.set_data_layout(
+            "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-"
+            "f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-"
+            "v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-"
+            "v512:512:512-v1024:1024:1024-n8:16:32"
+        )
+
         ret = str(llvm_mod)
         del llvm_mod
         del context

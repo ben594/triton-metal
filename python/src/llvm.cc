@@ -559,6 +559,15 @@ void init_triton_llvm(py::module &&m) {
            [](llvm::Module *mod, llvm::Module::ModFlagBehavior behavior,
               std::string &key, uint32_t value) {
              return mod->addModuleFlag(behavior, key, value);
+           })
+      .def("set_data_layout",
+           [](llvm::Module *mod, const std::string &layout) {
+             mod->setDataLayout(layout);
+           })
+      .def("set_target_triple",
+           [](llvm::Module *mod, const std::string &triple) {
+             llvm::Triple targetTriple(triple);
+             mod->setTargetTriple(targetTriple);
            });
 
   py::class_<llvm::Function>(m, "function", py::module_local())
