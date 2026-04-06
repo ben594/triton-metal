@@ -2,6 +2,7 @@
 
 #include "PatternTritonGPUOpToLLVM.h"
 #include "mlir/Conversion/FuncToLLVM/ConvertFuncToLLVM.h"
+#include "mlir/Dialect/LLVMIR/LLVMAttrs.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
@@ -29,6 +30,19 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
 
     if (triton::isKernel(funcOp)) {
       newFuncOp.setLinkage(LLVM::Linkage::External);
+
+      // set func attributes
+      {
+        SmallVector<Attribute> funcAttrs;
+        auto addStr = [&](StringRef s) {
+          funcAttrs.push_back(rewriter.getStringAttr(s));
+        };
+        addStr("nounwind");
+        addStr("no-builtins");
+        newFuncOp.setPassthroughAttr(ArrayAttr::get(ctx, funcAttrs));
+
+        newFuncOp.setUnnamedAddr(LLVM::UnnamedAddr::Local);
+      }
 
       // pass thread/simd/group idxs as extra i32 params to kernel
       // TODO set metadata and handle multiple dims
