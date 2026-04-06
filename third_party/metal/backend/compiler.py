@@ -115,6 +115,19 @@ class MetalBackend(BaseBackend):
             "v512:512:512-v1024:1024:1024-n8:16:32"
         )
 
+        # add module flags
+        llvm_mod.add_flag(llvm.MODULE_FLAG_BEHAVIOR_ERROR, "wchar_size", 4)
+        llvm_mod.add_flag(llvm.MODULE_FLAG_BEHAVIOR_MAX, "frame-pointer", 2)
+        llvm_mod.add_flag(llvm.MODULE_FLAG_BEHAVIOR_MAX, "air.max_device_buffers", 31)
+        llvm_mod.add_flag(llvm.MODULE_FLAG_BEHAVIOR_MAX, "air.max_constant_buffers", 31)
+        llvm_mod.add_flag(llvm.MODULE_FLAG_BEHAVIOR_MAX, "air.max_threadgroup_buffers", 31)
+        llvm_mod.add_flag(llvm.MODULE_FLAG_BEHAVIOR_MAX, "air.max_textures", 128)
+        llvm_mod.add_flag(llvm.MODULE_FLAG_BEHAVIOR_MAX, "air.max_read_write_textures", 8)
+        llvm_mod.add_flag(llvm.MODULE_FLAG_BEHAVIOR_MAX, "air.max_samplers", 16)
+
+        # add metadata
+        metal.add_kernel_metadata(llvm_mod)
+
         ret = str(llvm_mod)
         del llvm_mod
         del context
@@ -125,13 +138,17 @@ class MetalBackend(BaseBackend):
         # TODO check what is in metadata and opt
         with tempfile.TemporaryDirectory() as tmpdir:
             air_path = os.path.join(tmpdir, "kernel.air")
+            bitcode_path = os.path.join(tmpdir, "kernel.ll")
             lib_path = os.path.join(tmpdir, "kernel.metallib")
 
             with open(air_path, "w") as f:
                 f.write(src)
 
+            # text -> bitcode
+            subprocess.run(["xcrun", "metal-as", air_path, "-o", bitcode_path])
+
             # .air -> .metallib
-            subprocess.run(["xcrun", "-sdk", "macosx", "metallib", air_path, "-o", lib_path], check=True)
+            subprocess.run(["xcrun", "-sdk", "macosx", "metallib", bitcode_path, "-o", lib_path], check=True)
             with open(lib_path, "rb") as f:
                 return f.read()
 
