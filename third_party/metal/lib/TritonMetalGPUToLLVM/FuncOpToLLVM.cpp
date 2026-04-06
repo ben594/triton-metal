@@ -30,7 +30,8 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
     if (triton::isKernel(funcOp)) {
       newFuncOp.setLinkage(LLVM::Linkage::External);
 
-      // AIR passes thread/group IDs as extra i32 params to kernel
+      // pass thread/simd/group idxs as extra i32 params to kernel
+      // TODO set metadata and handle multiple dims
       auto i32Type = IntegerType::get(ctx, 32);
 
       SmallVector<DictionaryAttr> argAttrs;
@@ -38,6 +39,7 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
 
       auto llvmFuncType = newFuncOp.getFunctionType();
       SmallVector<Type> params(llvmFuncType.getParams());
+      params.push_back(i32Type);
       params.push_back(i32Type);
       params.push_back(i32Type);
       newFuncOp.setFunctionType(
@@ -49,9 +51,11 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
       auto loc = funcOp.getLoc();
       region.addArgument(i32Type, loc);
       region.addArgument(i32Type, loc);
+      region.addArgument(i32Type, loc);
       auto noundef =
           rewriter.getNamedAttr("llvm.noundef", rewriter.getUnitAttr());
       auto argAttr = DictionaryAttr::get(ctx, {noundef});
+      argAttrs.push_back(argAttr);
       argAttrs.push_back(argAttr);
       argAttrs.push_back(argAttr);
       newFuncOp.setAllArgAttrs(argAttrs);

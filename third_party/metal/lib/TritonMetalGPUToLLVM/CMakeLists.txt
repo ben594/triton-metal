@@ -5,7 +5,7 @@ add_triton_library(TritonMetalGPUToLLVM
     ElementwiseOpToLLVM.cpp
     LoadStoreOpToLLVM.cpp
     Utility.cpp
-    GPUThreadIdOpToLLVM.cpp
+    GPUIdxOpsToLLVM.cpp
 
     DEPENDS
     TritonMetalGPUConversionPassIncGen

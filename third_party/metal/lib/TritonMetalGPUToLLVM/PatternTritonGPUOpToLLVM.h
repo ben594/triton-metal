@@ -22,10 +22,10 @@ void populateLoadStoreOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                        ModuleAxisInfoAnalysis &axisInfoAnalysis,
                                        PatternBenefit benefit);
 
-void populateGPUThreadIDOpConversionPattern(LLVMTypeConverter &typeConverter,
-                                            RewritePatternSet &patterns,
-                                            const TargetInfoBase &targetInfo,
-                                            PatternBenefit benefit);
+void populateGPUIdxOpsConversionPattern(LLVMTypeConverter &typeConverter,
+                                        RewritePatternSet &patterns,
+                                        const TargetInfoBase &targetInfo,
+                                        PatternBenefit benefit);
 } // namespace mlir::triton::metal
 
 #endif // TRITON_THIRD_PARTY_METAL_LIB_TRITONMETALGPUTOLLVM_PATTERNTRITONGPUOPTOLLVM_H_
