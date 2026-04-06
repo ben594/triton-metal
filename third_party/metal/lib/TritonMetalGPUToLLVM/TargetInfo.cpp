@@ -75,6 +75,7 @@ Value TargetInfo::programId(RewriterBase &rewriter, Location loc,
                   ->getParentOfType<LLVM::LLVMFuncOp>();
   unsigned numArgs = func.getNumArguments();
   if (axis == ProgramIDDim::X) {
+    // plan to pass threadgroup idx in grid as last arg
     return func.getArgument(numArgs - 1);
   }
   llvm_unreachable("Only X axis supported for now");

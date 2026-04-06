@@ -116,6 +116,9 @@ struct ConvertTritonMetalGPUToLLVM
     mlir::arith::populateArithToLLVMConversionPatterns(typeConverter, patterns);
     mlir::populateMathToLLVMConversionPatterns(typeConverter, patterns);
 
+    mlir::triton::metal::populateGPUThreadIDOpConversionPattern(
+        typeConverter, patterns, targetInfo, benefit);
+
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns)))) {
       return signalPassFailure();
     }
