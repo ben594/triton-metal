@@ -113,21 +113,6 @@ class MetalBackend(BaseBackend):
         return ret
 
     @staticmethod
-    def make_msl(src, metadata, opt) -> str:
-        mod = src
-        # TODO check what is in metadata and opt
-        metadata["shared"] = 0
-        metadata["global_scratch_size"] = 0
-        metadata["global_scratch_align"] = 1
-        metadata["profile_scratch_size"] = 0
-        metadata["profile_scratch_align"] = 1
-        msl_kernel = MSLKernel(mod)
-        msl_code: str = msl_kernel.generate_msl_code()
-        metadata["name"] = msl_kernel.name
-        metadata["num_warps"] = 4  # TODO just took 4 from an example, what should this be?
-        return msl_code
-
-    @staticmethod
     def make_metallib(src: str, metadata, opt) -> bytes:
         # TODO check what is in metadata and opt
         with tempfile.TemporaryDirectory() as tmpdir:
