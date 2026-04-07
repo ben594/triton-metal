@@ -2,7 +2,9 @@
 
 #include "PatternTritonGPUOpToLLVM.h"
 #include "mlir/Conversion/FuncToLLVM/ConvertFuncToLLVM.h"
+#include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/Dialect/LLVMIR/LLVMAttrs.h"
+#include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 
@@ -30,6 +32,39 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
 
     if (triton::isKernel(funcOp)) {
       newFuncOp.setLinkage(LLVM::Linkage::External);
+      auto funcType = newFuncOp.getFunctionType();
+      SmallVector<Type> params(funcType.getParams());
+      SmallVector<Type> origParams(funcType.getParams());
+
+      // convert scalar user args to ptr addrspace(1)
+      {
+        auto numUserArgs = newFuncOp.getNumArguments();
+        auto globalPtrType = LLVM::LLVMPointerType::get(ctx, 1);
+        for (unsigned i = 0; i < numUserArgs; i++) {
+          if (!mlir::isa<LLVM::LLVMPointerType>(params[i])) {
+            params[i] = globalPtrType; // scalar -> ptr
+            newFuncOp.setArgAttr(i, "llvm.noundef", rewriter.getUnitAttr());
+            newFuncOp.setArgAttr(i, "llvm.nocapture", rewriter.getUnitAttr());
+            newFuncOp.setArgAttr(i, "llvm.readonly", rewriter.getUnitAttr());
+            newFuncOp.setArgAttr(
+                i, "llvm.llvm.dereferenceable",
+                rewriter.getIntegerAttr(IntegerType::get(ctx, 64), 4));
+          }
+        }
+
+        newFuncOp.setFunctionType(
+            LLVM::LLVMFunctionType::get(funcType.getReturnType(), params));
+
+        // modify first block
+        auto &firstBlock = newFuncOp.getBody().front();
+        rewriter.setInsertionPointToStart(&firstBlock);
+        for (unsigned i = 0; i < numUserArgs; i++) {
+          auto arg = firstBlock.getArgument(i);
+          if (!mlir::isa<LLVM::LLVMPointerType>(origParams[i])) {
+            arg.setType(globalPtrType);
+          }
+        }
+      }
 
       // set func attributes
       {
@@ -51,13 +86,11 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
       SmallVector<DictionaryAttr> argAttrs;
       newFuncOp.getAllArgAttrs(argAttrs);
 
-      auto llvmFuncType = newFuncOp.getFunctionType();
-      SmallVector<Type> params(llvmFuncType.getParams());
       params.push_back(i32Type);
       params.push_back(i32Type);
       params.push_back(i32Type);
       newFuncOp.setFunctionType(
-          LLVM::LLVMFunctionType::get(llvmFuncType.getReturnType(), params));
+          LLVM::LLVMFunctionType::get(funcType.getReturnType(), params));
 
       // first entry block receives args from function params
       // so need to add additional params to first entry block

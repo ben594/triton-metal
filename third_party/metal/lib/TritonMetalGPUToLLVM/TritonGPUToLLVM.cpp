@@ -6,9 +6,12 @@
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
 #include "mlir/Conversion/LLVMCommon/LoweringOptions.h"
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
+#include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/PatternMatch.h"
+#include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
@@ -53,6 +56,33 @@ public:
   }
 };
 
+struct UnrealizedCastToLoadPattern
+    : public OpRewritePattern<UnrealizedConversionCastOp> {
+  UnrealizedCastToLoadPattern(MLIRContext *ctx, PatternBenefit benefit)
+      : OpRewritePattern<UnrealizedConversionCastOp>(ctx, benefit) {};
+
+  LogicalResult matchAndRewrite(UnrealizedConversionCastOp castOp,
+                                PatternRewriter &rewriter) const override {
+    // handle ptr to scalar casts for scalar kernel args
+    auto inputs = castOp.getInputs();
+    if (inputs.size() != 1) {
+      return failure();
+    }
+    if (!mlir::isa<LLVM::LLVMPointerType>(inputs[0].getType())) {
+      return failure();
+    }
+    // only handle scalar LLVM output types (int/float)
+    // TODO can check if input is a kernel arg?
+    auto resultType = castOp.getType(0);
+    if (!mlir::isa<IntegerType, FloatType>(resultType))
+      return failure();
+
+    rewriter.replaceOpWithNewOp<LLVM::LoadOp>(castOp, castOp.getType(0),
+                                              inputs[0]);
+    return success();
+  }
+};
+
 struct ConvertTritonMetalGPUToLLVM
     : public triton::impl::ConvertTritonMetalGPUToLLVMBase<
           ConvertTritonMetalGPUToLLVM> {
@@ -92,10 +122,17 @@ struct ConvertTritonMetalGPUToLLVM
         return signalPassFailure();
     }
 
+    int benefit = patternBenefitPrioritizeOverLLVMConversions;
+    {
+      RewritePatternSet cleanupPatterns(context);
+      cleanupPatterns.add<UnrealizedCastToLoadPattern>(context, benefit);
+      if (failed(applyPatternsGreedily(mod, std::move(cleanupPatterns))))
+        return signalPassFailure();
+    }
+
     ModuleAxisInfoAnalysis axisInfoAnalysis(mod);
 
     RewritePatternSet patterns(context);
-    int benefit = patternBenefitPrioritizeOverLLVMConversions;
 
     metal::populateElementwiseOpToLLVMPatterns(
         typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
