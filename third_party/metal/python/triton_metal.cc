@@ -44,8 +44,17 @@ void addAirKernelMetadata(llvm::Module *mod) {
 
       if (i < numUserArgs || i == numUserArgs || i == numUserArgs + 1) {
         // buffer arg (user args + scratch ptrs)
-        // TODO scalar args need to be handled differently
+        bool isScalar = arg.getDereferenceableBytes() > 0;
+
         argMetadata.push_back(MDString::get(ctx, "air.buffer"));
+
+        // scalar args passed as device buffers need extra metadata
+        if (isScalar) {
+          argMetadata.push_back(MDString::get(ctx, "air.buffer_size"));
+          argMetadata.push_back(ConstantAsMetadata::get(
+              ConstantInt::get(Type::getInt32Ty(ctx), 4)));
+        }
+
         argMetadata.push_back(MDString::get(ctx, "air.location_index"));
         argMetadata.push_back(ConstantAsMetadata::get(
             ConstantInt::get(Type::getInt32Ty(ctx), i)));
