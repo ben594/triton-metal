@@ -129,6 +129,12 @@ class MetalBackend(BaseBackend):
         metal.add_kernel_metadata(llvm_mod)
 
         ret = str(llvm_mod)
+
+        # replace llvm attributes with compatible versions
+        llvm_attributes_replacements = {"captures(none)": "nocapture"}
+        for orig, new_attr in llvm_attributes_replacements.items():
+            ret = ret.replace(orig, new_attr)
+
         del llvm_mod
         del context
         return ret

@@ -159,6 +159,9 @@ struct ConvertTritonMetalGPUToLLVM
     if (failed(applyPartialConversion(mod, convTarget, std::move(patterns)))) {
       return signalPassFailure();
     }
+
+    // "or disjoint" op seems to not be supported by metal-as
+    mod.walk([](LLVM::OrOp op) { op.setIsDisjoint(false); });
   }
 };
 
