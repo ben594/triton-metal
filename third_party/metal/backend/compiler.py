@@ -1,6 +1,7 @@
 import functools
 import hashlib
 import os
+import re
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -10,6 +11,8 @@ from typing import Optional, Tuple
 from triton import knobs
 from triton._C.libtriton import ir, llvm, metal, passes
 from triton.backends.compiler import BaseBackend, GPUTarget, Language
+
+from .air_utils import convert_opaque_ptrs_to_typed
 
 
 def get_min_dot_size(target: GPUTarget):
@@ -135,6 +138,20 @@ class MetalBackend(BaseBackend):
         for orig, new_attr in llvm_attributes_replacements.items():
             ret = ret.replace(orig, new_attr)
 
+        # convert opaque ptrs to typed ptrs for metal using regex
+        # newer llvm that triton uses does not support typed ptrs
+        # xcrun metal (older llvm) with -opaque-pointers does not work with metal jit can't compile
+        ret = convert_opaque_ptrs_to_typed(ret)
+
+        # find kernel name
+        names = re.findall(r"define void @([a-zA-Z_][a-zA-Z0-9_]*)", ret)
+        assert len(names) == 1
+        metadata["name"] = names[0]
+
+        # get more metadata
+        # TODO need to handle this after adding allocate shared mem
+        metadata["shared"] = src.get_int_attr("ttg.shared") or 0
+
         del llvm_mod
         del context
         return ret
@@ -143,18 +160,18 @@ class MetalBackend(BaseBackend):
     def make_metallib(src: str, metadata, opt) -> bytes:
         # TODO check what is in metadata and opt
         with tempfile.TemporaryDirectory() as tmpdir:
-            air_path = os.path.join(tmpdir, "kernel.air")
-            bitcode_path = os.path.join(tmpdir, "kernel.ll")
+            air_path = os.path.join(tmpdir, "kernel.ll")
             lib_path = os.path.join(tmpdir, "kernel.metallib")
 
             with open(air_path, "w") as f:
                 f.write(src)
 
-            # text -> bitcode
-            subprocess.run(["xcrun", "metal-as", air_path, "-o", bitcode_path])
-
-            # .air -> .metallib
-            subprocess.run(["xcrun", "-sdk", "macosx", "metallib", bitcode_path, "-o", lib_path], check=True)
+            # ir -> metallib
+            result = subprocess.run(
+                ["xcrun", "metal", "-x", "ir", air_path, "-o", lib_path], capture_output=True, text=True
+            )
+            if result.returncode != 0:
+                raise RuntimeError(f"metal compiler failed: {result.stderr}")
             with open(lib_path, "rb") as f:
                 return f.read()
 
