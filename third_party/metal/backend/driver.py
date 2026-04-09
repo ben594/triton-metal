@@ -1,9 +1,44 @@
 import functools
+import time
 
 import Metal
 from triton._C import _metal_driver
 from triton.backends.compiler import GPUTarget
 from triton.backends.driver import DriverBase
+
+
+class MPSEvent:
+    """Custom event for mps
+
+    Seems that pytorch mps events do not work in do_bench, even for regular pytorch without triton.
+    """
+
+    def __init__(self, enable_timing=False):
+        self.t = None
+
+    def record(self):
+        import torch
+
+        torch.mps.synchronize()
+        self.t = time.perf_counter()
+
+    def synchronize(self):
+        pass  # already synced in record()
+
+    def elapsed_time(self, end_event: "MPSEvent"):
+        """Returns elapsed time in milliseconds."""
+        return (end_event.t - self.t) * 1000.0
+
+
+class MPSInterface:
+    """Replacement for torch.mps to use in do_bench"""
+
+    Event = MPSEvent
+
+    def synchronize(self):
+        import torch
+
+        torch.mps.synchronize()
 
 
 def ty_to_cpp(ty):
@@ -26,26 +61,6 @@ def ty_to_cpp(ty):
         "f32": "float",
         "fp64": "double",
     }[ty]
-
-
-# Scalar type -> struct.pack format string
-_SCALAR_FMT = {
-    "i1": "b",
-    "i8": "b",
-    "i16": "h",
-    "i32": "i",
-    "i64": "q",
-    "u1": "B",
-    "u8": "B",
-    "u16": "H",
-    "u32": "I",
-    "u64": "Q",
-    "fp16": "e",
-    "bf16": "e",
-    "fp32": "f",
-    "f32": "f",
-    "fp64": "d",
-}
 
 
 class MetalUtils:
@@ -110,7 +125,7 @@ class MetalLauncher:
 
         grid = (gridX, gridY, gridZ)
         _metal_driver.launch_kernel(
-            stream, grid, function, self.signature, args, kernel_metadata, self.num_warps, self.warp_size
+            grid, function, self.signature, args, kernel_metadata, self.num_warps, self.warp_size
         )
 
         if launch_exit_hook is not None:
@@ -177,6 +192,4 @@ class MetalDriver(DriverBase):
         cache.zero_()
 
     def get_device_interface(self):
-        import torch
-
-        return torch.mps
+        return MPSInterface()
