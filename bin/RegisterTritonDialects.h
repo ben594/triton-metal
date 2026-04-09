@@ -21,6 +21,8 @@
 #include "TritonAMDGPUTransforms/Passes.h"
 #include "TritonAMDGPUTransforms/TritonGPUConversion.h"
 
+#include "TritonMetalGPUToLLVM/Passes.h"
+
 #include "triton/Dialect/Triton/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
 #include "triton/Dialect/TritonInstrument/Transforms/Passes.h"
@@ -103,6 +105,9 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   mlir::triton::registerConvertTritonAMDGPUToLLVM();
   mlir::triton::registerConvertBuiltinFuncToLLVM();
   mlir::triton::registerConvertWarpPipeline();
+  
+  // TritonMetalGPUToLLVM passes
+  mlir::triton::registerConvertTritonMetalGPUToLLVM();
 
   mlir::ub::registerConvertUBToLLVMInterface(registry);
   mlir::registerConvertNVVMToLLVMInterface(registry);

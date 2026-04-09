@@ -15,6 +15,10 @@ def _create_driver() -> DriverBase:
             raise RuntimeError(f"Backend device '{selected}' is not active.")
         return driver()
     else:
+        if os.getenv("TRITON_METAL_BACKEND", "0") == "1":
+            if "metal" not in backends:
+                raise RuntimeError("TRITON_METAL_BACKEND is set, but metal backend is unavailable")
+            return backends["metal"].driver()
         active_drivers = [x.driver for x in backends.values() if x.driver.is_active()]
         if len(active_drivers) != 1:
             raise RuntimeError(f"{len(active_drivers)} active drivers ({active_drivers}). There should only be one.")
