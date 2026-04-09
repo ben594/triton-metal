@@ -69,7 +69,6 @@ class MetalUtils:
         Needs to return: module, function, n_regs, n_spills, n_max_threads
         """
         module, kernel_id, n_regs, n_spills, n_max_threads = _metal_driver.load_binary(kernel_name, metallib_bytes)
-        breakpoint()
 
         return module, kernel_id, n_regs, n_spills, n_max_threads
 
