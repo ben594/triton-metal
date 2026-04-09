@@ -137,13 +137,9 @@ struct KernelArg {
   std::vector<uint8_t> bytes; // use setBytes
 };
 
-void launchKernel(uintptr_t commandBufPtr,
-                  const std::tuple<int, int, int> &grid, int kernelId,
+void launchKernel(const std::tuple<int, int, int> &grid, int kernelId,
                   py::dict signature, py::tuple args, py::object kernelMetadata,
                   int numWarps, int warpSize) {
-  id<MTLCommandBuffer> cmdBuf =
-      (__bridge id<MTLCommandBuffer>)(void *)commandBufPtr;
-
   std::shared_ptr<MetalKernel> kernel = idToKernelMap.at(kernelId);
   id<MTLComputePipelineState> pipelineState = kernel->pipeline;
 
@@ -174,6 +170,7 @@ void launchKernel(uintptr_t commandBufPtr,
 
   dispatch_queue_t serialQueue = torch::mps::get_dispatch_queue();
   dispatch_sync(serialQueue, ^{
+    id<MTLCommandBuffer> cmdBuf = torch::mps::get_command_buffer();
     id<MTLComputeCommandEncoder> encoder = [cmdBuf computeCommandEncoder];
     [encoder setComputePipelineState:pipelineState];
 
@@ -189,7 +186,6 @@ void launchKernel(uintptr_t commandBufPtr,
     [encoder dispatchThreadgroups:threadgroups
             threadsPerThreadgroup:threadsPerTG];
     [encoder endEncoding];
-    torch::mps::commit();
   });
 }
 
@@ -248,8 +244,7 @@ PYBIND11_MODULE(_metal_driver, m) {
     idToKernelMap.erase(id_it);
   });
 
-  m.def("launch_kernel", &launchKernel, py::arg("command_buf_ptr"),
-        py::arg("grid"), py::arg("kernel_id"), py::arg("signature"),
-        py::arg("args"), py::arg("kernel_metadata"), py::arg("num_warps"),
-        py::arg("warp_size"));
+  m.def("launch_kernel", &launchKernel, py::arg("grid"), py::arg("kernel_id"),
+        py::arg("signature"), py::arg("args"), py::arg("kernel_metadata"),
+        py::arg("num_warps"), py::arg("warp_size"));
 }
