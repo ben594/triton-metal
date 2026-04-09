@@ -47,7 +47,7 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
             newFuncOp.setArgAttr(i, "llvm.nocapture", rewriter.getUnitAttr());
             newFuncOp.setArgAttr(i, "llvm.readonly", rewriter.getUnitAttr());
             newFuncOp.setArgAttr(
-                i, "llvm.llvm.dereferenceable",
+                i, "llvm.dereferenceable",
                 rewriter.getIntegerAttr(IntegerType::get(ctx, 64), 4));
           }
         }
