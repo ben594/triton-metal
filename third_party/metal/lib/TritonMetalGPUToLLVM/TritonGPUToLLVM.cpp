@@ -136,6 +136,13 @@ struct ConvertTritonMetalGPUToLLVM
         return signalPassFailure();
     }
 
+    {
+      // initSharedMemory is run before the conversion of call and ret ops,
+      // because the call op has to know the shared memory base address of each
+      // function
+      initSharedMemory(typeConverter);
+    }
+
     int benefit = patternBenefitPrioritizeOverLLVMConversions;
     {
       RewritePatternSet cleanupPatterns(context);
@@ -148,6 +155,8 @@ struct ConvertTritonMetalGPUToLLVM
 
     RewritePatternSet patterns(context);
 
+    mlir::triton::populateConvertLayoutOpToLLVMPatterns(
+        typeConverter, targetInfo, patterns, benefit);
     metal::populateElementwiseOpToLLVMPatterns(
         typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
     metal::populateLoadStoreOpToLLVMPatterns(
@@ -185,6 +194,25 @@ struct ConvertTritonMetalGPUToLLVM
 
     // "or disjoint" op seems to not be supported by metal-as
     mod.walk([](LLVM::OrOp op) { op.setIsDisjoint(false); });
+  }
+
+private:
+  void initSharedMemory(LLVMTypeConverter &typeConverter) {
+    ModuleOp mod = getOperation();
+    OpBuilder b(mod.getBodyRegion());
+    auto ctx = mod.getContext();
+    auto loc = mod.getLoc();
+    auto elemTy = typeConverter.convertType(b.getIntegerType(8));
+    // Set array size 0 and external linkage indicates that we use dynamic
+    // shared allocation to allow a larger shared memory size for each kernel.
+    //
+    // Ask for 16B alignment on global_smem because that's the largest we should
+    // ever need (4xi32).
+    auto arrayTy = LLVM::LLVMArrayType::get(elemTy, 0);
+    auto global = LLVM::GlobalOp::create(
+        b, loc, arrayTy, /*isConstant=*/false, LLVM::Linkage::External,
+        "global_smem", /*value=*/Attribute(), /*alignment=*/16,
+        /*addrSpace=*/3);
   }
 };
 

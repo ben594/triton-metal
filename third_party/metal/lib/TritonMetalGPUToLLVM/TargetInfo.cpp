@@ -24,7 +24,8 @@ Value TargetInfo::ballot(RewriterBase &rewriter, Location loc, Type type,
 
 void TargetInfo::barrier(Location loc, RewriterBase &rewriter,
                          triton::gpu::AddrSpace targets) const {
-  llvm_unreachable("not implemented");
+  auto b = TritonLLVMOpBuilder(loc, rewriter);
+  b.barrier(targets);
 }
 
 void TargetInfo::clusterBarrier(Location loc, RewriterBase &rewriter) const {
@@ -38,13 +39,23 @@ void TargetInfo::warpSync(Location loc, RewriterBase &rewriter) const {
 void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
                               std::optional<Value> ctaId, Value val,
                               Value pred) const {
-  llvm_unreachable("not implemented");
+  if (ctaId.has_value()) {
+    llvm::report_fatal_error(
+        "Metal GPU does not support cross-CTA shared memory transfers");
+  }
+  mlir::LLVM::metal::llStore(rewriter, loc, ptr, val, pred);
 }
 
 Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
                               std::optional<Value> ctaId, Type elemTy,
                               Value pred, Operation *localLoadOp) const {
-  llvm_unreachable("not implemented");
+  if (ctaId.has_value()) {
+    llvm::report_fatal_error(
+        "Metal GPU does not support cross-CTA shared memory transfers");
+  }
+  Value falseVal = LLVM::ConstantOp::create(rewriter, loc, elemTy,
+                                            rewriter.getZeroAttr(elemTy));
+  return mlir::LLVM::metal::llLoad(rewriter, loc, ptr, elemTy, pred, falseVal);
 }
 
 Value TargetInfo::shuffleXor(RewriterBase &rewriter, Location loc, Value val,
