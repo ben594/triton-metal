@@ -29,9 +29,9 @@ void addAirKernelMetadata(llvm::Module *mod) {
     // build arg metadata
     SmallVector<Metadata *> allArgMetadata;
     unsigned numArgs = func.arg_size();
-    // last 3 are thread idx in grid, simd idx in threadgroup, and threadgroup
-    // idx in grid, 2 before that are scratch ptrs
-    unsigned numUserArgs = numArgs - 5;
+    // last 4 are num threadgroups in grid, thread idx in grid, simd idx in
+    // threadgroup, and threadgroup idx in grid, 2 before that are scratch ptrs
+    unsigned numUserArgs = numArgs - 6;
 
     // loop through args and create arg metadata
     for (unsigned i = 0; i < numArgs; i++) {
@@ -78,6 +78,12 @@ void addAirKernelMetadata(llvm::Module *mod) {
         argMetadata.push_back(MDString::get(ctx, "float"));
         argMetadata.push_back(MDString::get(ctx, "air.arg_name"));
         argMetadata.push_back(MDString::get(ctx, "arg_" + std::to_string(i)));
+      } else if (i == numArgs - 4) {
+        argMetadata.push_back(MDString::get(ctx, "air.threadgroups_per_grid"));
+        argMetadata.push_back(MDString::get(ctx, "air.arg_type_name"));
+        argMetadata.push_back(MDString::get(ctx, "uint"));
+        argMetadata.push_back(MDString::get(ctx, "air.arg_name"));
+        argMetadata.push_back(MDString::get(ctx, "num_threadgroups"));
       } else if (i == numArgs - 3) {
         argMetadata.push_back(
             MDString::get(ctx, "air.thread_position_in_grid"));

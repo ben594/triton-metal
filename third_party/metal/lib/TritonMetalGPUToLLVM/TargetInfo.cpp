@@ -1,7 +1,11 @@
 #include "TargetInfo.h"
+#include "Utility.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "triton/Conversion/TritonGPUToLLVM/Utility.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "llvm/Support/ErrorHandling.h"
+
+using namespace mlir;
 
 namespace mlir::triton::metal {
 
@@ -45,7 +49,7 @@ Value TargetInfo::loadDShared(RewriterBase &rewriter, Location loc, Value ptr,
 
 Value TargetInfo::shuffleXor(RewriterBase &rewriter, Location loc, Value val,
                              int i) const {
-  llvm_unreachable("not implemented");
+  return LLVM::metal::shuffleXor(loc, rewriter, val, i);
 }
 
 Value TargetInfo::shuffleUp(RewriterBase &rewriter, Location loc, Value val,
@@ -81,10 +85,23 @@ Value TargetInfo::programId(RewriterBase &rewriter, Location loc,
   llvm_unreachable("Only X axis supported for now");
 }
 
+Value TargetInfo::numPrograms(RewriterBase &rewriter, Location loc,
+                              ModuleOp moduleOp, ProgramIDDim axis) const {
+  auto func = rewriter.getInsertionBlock()
+                  ->getParent()
+                  ->getParentOfType<LLVM::LLVMFuncOp>();
+  unsigned numArgs = func.getNumArguments();
+  if (axis == ProgramIDDim::X) {
+    // plan to pass number of threadgroups in grid as arg
+    return func.getArgument(numArgs - 4);
+  }
+  llvm_unreachable("Only X axis supported for now");
+}
+
 bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
                             SmallVector<Value> &acc, triton::ReduceOp op,
                             unsigned reduceLaneIdMask) const {
-  llvm_unreachable("not implemented");
+  return false;
 }
 
 std::string TargetInfo::getMulhiFuncName(Type resultElementTy) const {

@@ -1,3 +1,5 @@
+#include "Analysis/MetalGPUAllocation.h"
+#include "MembarUtility.h"
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TargetInfo.h"
 #include "TritonMetalGPUToLLVM/Passes.h"
@@ -12,6 +14,8 @@
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "triton/Analysis/Allocation.h"
+#include "triton/Analysis/Membar.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
@@ -101,6 +105,17 @@ struct ConvertTritonMetalGPUToLLVM
 
     metal::TargetInfo targetInfo(this->arch.getValue());
 
+    // Allocate shared memory and set barrier
+    {
+      ModuleAllocation allocation(mod,
+                                  metal::MetalAllocationAnalysisScratchSizeFn,
+                                  targetInfo.getSharedMemoryPartitionSize());
+
+      ModuleMembarAnalysis membarPass(&allocation,
+                                      mlir::triton::metal::membarFilter);
+      membarPass.run();
+    }
+
     mlir::LowerToLLVMOptions option(context);
     option.overrideIndexBitwidth(32);
 
@@ -138,6 +153,8 @@ struct ConvertTritonMetalGPUToLLVM
         typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
     metal::populateLoadStoreOpToLLVMPatterns(
         typeConverter, targetInfo, patterns, axisInfoAnalysis, benefit);
+    mlir::triton::populateReduceOpToLLVMPatterns(typeConverter, patterns,
+                                                 targetInfo, benefit);
     mlir::triton::populateViewOpToLLVMPatterns(typeConverter, patterns,
                                                benefit);
     mlir::triton::populateMakeRangeOpToLLVMPattern(typeConverter, targetInfo,
@@ -149,6 +166,10 @@ struct ConvertTritonMetalGPUToLLVM
     // this handles program id
     mlir::triton::populateSPMDOpToLLVMPattern(typeConverter, patterns,
                                               targetInfo, benefit);
+
+    // this handles num programs
+    metal::populateSPMDOpToLLVMPattern(typeConverter, patterns, targetInfo,
+                                       benefit);
 
     mlir::arith::populateArithToLLVMConversionPatterns(typeConverter, patterns);
     mlir::populateMathToLLVMConversionPatterns(typeConverter, patterns);

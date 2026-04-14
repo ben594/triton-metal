@@ -23,4 +23,6 @@ unsigned getContiguity(Value ptr, ModuleAxisInfoAnalysis &axisAnalysisPass);
 // Determine the vector size of a tensor of pointers
 unsigned getVectorSize(Value ptr,
                        triton::ModuleAxisInfoAnalysis &axisAnalysisPass);
+
+Value shuffleXor(Location loc, RewriterBase &rewriter, Value val, int i);
 } // namespace mlir::LLVM::metal
