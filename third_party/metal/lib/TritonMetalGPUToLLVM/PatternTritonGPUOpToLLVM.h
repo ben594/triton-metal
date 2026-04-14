@@ -27,9 +27,14 @@ void populateGPUIdxOpsConversionPattern(LLVMTypeConverter &typeConverter,
                                         const TargetInfoBase &targetInfo,
                                         PatternBenefit benefit);
 
-void populateSPMDOpToLLVMPattern(
-    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
-    const metal::TargetInfo &targetInfo, PatternBenefit benefit);
+void populateSPMDOpToLLVMPattern(LLVMTypeConverter &typeConverter,
+                                 RewritePatternSet &patterns,
+                                 const metal::TargetInfo &targetInfo,
+                                 PatternBenefit benefit);
+
+void populateBarrierOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
+                                     RewritePatternSet &patterns,
+                                     PatternBenefit benefit);
 
 } // namespace mlir::triton::metal
 

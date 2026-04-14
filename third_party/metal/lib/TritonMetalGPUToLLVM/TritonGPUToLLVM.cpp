@@ -156,6 +156,9 @@ struct ConvertTritonMetalGPUToLLVM
                                                  targetInfo, benefit);
     mlir::triton::populateViewOpToLLVMPatterns(typeConverter, patterns,
                                                benefit);
+    metal::populateBarrierOpToLLVMPatterns(typeConverter, patterns, benefit);
+    mlir::triton::populateMemoryOpToLLVMPatterns(typeConverter, targetInfo,
+                                                 patterns, benefit);
     mlir::triton::populateMakeRangeOpToLLVMPattern(typeConverter, targetInfo,
                                                    patterns, benefit);
 

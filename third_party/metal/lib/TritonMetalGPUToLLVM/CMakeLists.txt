@@ -1,6 +1,7 @@
 add_triton_library(TritonMetalGPUToLLVM
     FuncOpToLLVM.cpp
     MembarUtility.cpp
+    MemoryOpToLLVM.cpp
     TargetInfo.cpp
     TritonGPUToLLVM.cpp
     ElementwiseOpToLLVM.cpp
