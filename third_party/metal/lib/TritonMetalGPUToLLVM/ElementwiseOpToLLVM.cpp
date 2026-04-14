@@ -21,6 +21,7 @@ void mlir::triton::metal::populateElementwiseOpToLLVMPatterns(
   POPULATE_OP(arith::SubFOp, LLVM::FSubOp);
   POPULATE_OP(arith::AddFOp, LLVM::FAddOp);
   POPULATE_OP(arith::MulFOp, LLVM::FMulOp);
+  POPULATE_OP(arith::DivFOp, LLVM::FDivOp);
 
 #undef POPULATE_OP
 }
