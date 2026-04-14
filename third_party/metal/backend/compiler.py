@@ -95,12 +95,15 @@ class MetalBackend(BaseBackend):
         # TritonGPU -> LLVM-IR (MLIR)
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
-        
+
         passes.convert.add_scf_to_cf(pm)
         passes.ttgpuir.add_allocate_shared_memory(pm)
 
         metal.passes.ttgpuir.add_to_llvmir(pm, str(options.arch))
         passes.common.add_canonicalizer(pm)
+
+        passes.common.add_cse(pm)
+        passes.common.add_symbol_dce(pm)
 
         pm.run(mod, "make_llir")
 
@@ -140,6 +143,10 @@ class MetalBackend(BaseBackend):
         llvm_attributes_replacements = {"captures(none)": "nocapture"}
         for orig, new_attr in llvm_attributes_replacements.items():
             ret = ret.replace(orig, new_attr)
+
+        # convert LLVM 17+ splat syntax to old vector constant format
+        # xcrun metal uses old LLVM: use <type val> instead of splat(type val)
+        ret = re.sub(r"splat\s*\(([^)]+)\)", r"<\1>", ret)
 
         # convert opaque ptrs to typed ptrs for metal using regex
         # newer llvm that triton uses does not support typed ptrs

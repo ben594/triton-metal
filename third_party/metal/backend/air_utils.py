@@ -5,7 +5,7 @@ def rewrite_ptrs(ir: str) -> str:
     # prev: getelementptr float, ptr addrspace(1) %0, i64 %9
     # new: getelementptr float, float addrspace(1)* %0, i64, %9
     ir = re.sub(
-        r"(getelementptr\s+(<\d+\s+x\s+\w+>|\w+)),\s+ptr\s+addrspace\((\d+)\)",
+        r"(getelementptr(?:\s+inbounds)?\s+(<\d+\s+x\s+\w+>|\w+)),\s+ptr\s+addrspace\((\d+)\)",
         lambda m: f"{m.group(1)}, {m.group(2)} addrspace({m.group(3)})*",
         ir,
     )
@@ -199,7 +199,7 @@ def convert_opaque_ptrs_to_typed(ir: str) -> str:
     # search for getelementptr/load/store instructions to determine types of the ptrs
     ptr_type_dict: dict = {}
     # e.g. getelementptr/load float, ptr addrspace(1) %1
-    for m in re.finditer(r"(?:getelementptr|load)\s+(<\d+\s+x\s+\w+>|\w+),\s+ptr\s+addrspace\((\d+)\)\s+(%\w+)", ir):
+    for m in re.finditer(r"(?:getelementptr(?:\s+inbounds)?|load)\s+(<\d+\s+x\s+\w+>|\w+),\s+ptr\s+addrspace\((\d+)\)\s+(%\w+)", ir):
         # group(3): var name
         # group(1): ptr type
         # group(2): addr space

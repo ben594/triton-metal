@@ -192,6 +192,13 @@ struct ConvertTritonMetalGPUToLLVM
       return signalPassFailure();
     }
 
+    {
+      RewritePatternSet cleanupPatterns(context);
+      cleanupPatterns.add<UnrealizedCastToLoadPattern>(context, benefit);
+      if (failed(applyPatternsGreedily(mod, std::move(cleanupPatterns))))
+        return signalPassFailure();
+    }
+
     // "or disjoint" op seems to not be supported by metal-as
     mod.walk([](LLVM::OrOp op) { op.setIsDisjoint(false); });
   }
