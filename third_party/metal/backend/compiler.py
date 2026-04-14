@@ -95,6 +95,9 @@ class MetalBackend(BaseBackend):
         # TritonGPU -> LLVM-IR (MLIR)
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
+        
+        passes.convert.add_scf_to_cf(pm)
+        passes.ttgpuir.add_allocate_shared_memory(pm)
 
         metal.passes.ttgpuir.add_to_llvmir(pm, str(options.arch))
         passes.common.add_canonicalizer(pm)

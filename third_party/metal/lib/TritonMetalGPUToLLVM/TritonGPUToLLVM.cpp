@@ -108,8 +108,7 @@ struct ConvertTritonMetalGPUToLLVM
     // Allocate shared memory and set barrier
     {
       ModuleAllocation allocation(mod,
-                                  metal::MetalAllocationAnalysisScratchSizeFn,
-                                  targetInfo.getSharedMemoryPartitionSize());
+                                  metal::MetalAllocationAnalysisScratchSizeFn);
 
       ModuleMembarAnalysis membarPass(&allocation,
                                       mlir::triton::metal::membarFilter);
