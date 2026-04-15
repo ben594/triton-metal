@@ -34,6 +34,10 @@ def is_hip():
     return triton.runtime.driver.active.get_current_target().backend == "hip"
 
 
+def is_metal():
+    return triton.runtime.driver.active.get_current_target().backend == "metal"
+
+
 def is_cdna():
     return is_hip() and triton.runtime.driver.active.get_current_target().arch in ('gfx940', 'gfx941', 'gfx942',
                                                                                    'gfx90a', 'gfx908')
@@ -163,9 +167,13 @@ def softmax(x):
         MAX_NUM_THREADS = properties["max_threads_per_sm"]
         max_num_waves = MAX_NUM_THREADS // WARP_SIZE
         occupancy = min(NUM_GPRS // WARP_SIZE // n_regs, max_num_waves) // num_warps
+    elif is_metal():
+        threads_per_program = num_warps * WARP_SIZE
+        n_max_threads = kernel.n_max_threads
+        occupancy = n_max_threads // threads_per_program
     else:
         occupancy = NUM_REGS // (n_regs * WARP_SIZE * num_warps)
-    occupancy = min(occupancy, SIZE_SMEM // size_smem)
+    occupancy = min(occupancy, (SIZE_SMEM // size_smem) if size_smem > 0 else float("inf"))
     num_programs = NUM_SM * occupancy
 
     num_programs = min(num_programs, n_rows)
@@ -214,8 +222,9 @@ assert torch.allclose(y_triton, y_torch), (y_triton, y_torch)
     ))
 def benchmark(M, N, provider):
     x = torch.randn(M, N, device=DEVICE, dtype=torch.float32)
-    stream = getattr(torch, DEVICE.type).Stream()
-    getattr(torch, DEVICE.type).set_stream(stream)
+    if not is_metal(): # torch.mps does not have Stream()
+        stream = getattr(torch, DEVICE.type).Stream()
+        getattr(torch, DEVICE.type).set_stream(stream)
     if provider == 'torch':
         ms = triton.testing.do_bench(lambda: torch.softmax(x, axis=-1))
     if provider == 'triton':

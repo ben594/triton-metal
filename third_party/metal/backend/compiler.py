@@ -107,9 +107,6 @@ class MetalBackend(BaseBackend):
 
         pm.run(mod, "make_llir")
 
-        print("Finished making llir")
-        print("MOD\n", mod)
-
         # LLVM-IR (MLIR) -> LLVM-IR (LLVM)
         llvm.init_targets()
         context = llvm.context()
