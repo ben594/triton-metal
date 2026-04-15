@@ -96,13 +96,16 @@ class MetalBackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
 
+        passes.convert.add_scf_to_cf(pm)
+        passes.ttgpuir.add_allocate_shared_memory(pm)
+
         metal.passes.ttgpuir.add_to_llvmir(pm, str(options.arch))
         passes.common.add_canonicalizer(pm)
 
-        pm.run(mod, "make_llir")
+        passes.common.add_cse(pm)
+        passes.common.add_symbol_dce(pm)
 
-        print("Finished making llir")
-        print("MOD\n", mod)
+        pm.run(mod, "make_llir")
 
         # LLVM-IR (MLIR) -> LLVM-IR (LLVM)
         llvm.init_targets()
@@ -134,9 +137,22 @@ class MetalBackend(BaseBackend):
         ret = str(llvm_mod)
 
         # replace llvm attributes with compatible versions
-        llvm_attributes_replacements = {"captures(none)": "nocapture"}
+        llvm_attributes_replacements = {
+            "captures(none)": "nocapture",
+            "memory(none)": "readnone",
+            "memory(read)": "readonly",
+            "memory(write)": "writeonly",
+            "memory(readwrite)": "",
+        }
         for orig, new_attr in llvm_attributes_replacements.items():
             ret = ret.replace(orig, new_attr)
+
+        # convert LLVM 17+ splat syntax to old vector constant format
+        # xcrun metal uses old LLVM: use <type val> instead of splat(type val)
+        ret = re.sub(r"splat\s*\(([^)]+)\)", r"<\1>", ret)
+
+        # remove newer attributes unknown to old LLVM
+        ret = re.sub(r"\bnocreateundeforpoison\b", "", ret)
 
         # convert opaque ptrs to typed ptrs for metal using regex
         # newer llvm that triton uses does not support typed ptrs
@@ -150,7 +166,7 @@ class MetalBackend(BaseBackend):
 
         # get more metadata
         # TODO need to handle this after adding allocate shared mem
-        metadata["shared"] = src.get_int_attr("ttg.shared") or 0
+        metadata["shared"] = src.get_int_attr("ttg.shared")
 
         del llvm_mod
         del context

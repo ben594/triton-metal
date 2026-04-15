@@ -1,3 +1,5 @@
+#include "Analysis/MetalGPUAllocation.h"
+#include "MembarUtility.h"
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TargetInfo.h"
 #include "TritonMetalGPUToLLVM/Passes.h"
@@ -12,6 +14,8 @@
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "triton/Analysis/Allocation.h"
+#include "triton/Analysis/Membar.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 #include "triton/Conversion/TritonGPUToLLVM/TypeConverter.h"
 #include "triton/Dialect/TritonInstrument/IR/Dialect.h"
@@ -101,6 +105,14 @@ struct ConvertTritonMetalGPUToLLVM
 
     metal::TargetInfo targetInfo(this->arch.getValue());
 
+    // Allocate shared memory and set barrier
+    ModuleAllocation allocation(mod,
+                                metal::MetalAllocationAnalysisScratchSizeFn);
+
+    ModuleMembarAnalysis membarPass(&allocation,
+                                    mlir::triton::metal::membarFilter);
+    membarPass.run();
+
     mlir::LowerToLLVMOptions option(context);
     option.overrideIndexBitwidth(32);
 
@@ -122,6 +134,14 @@ struct ConvertTritonMetalGPUToLLVM
         return signalPassFailure();
     }
 
+    {
+      // initSharedMemory is run before the conversion of call and ret ops,
+      // because the call op has to know the shared memory base address of each
+      // function
+      auto sharedMemSize = allocation.getSharedMemorySize();
+      initSharedMemory(typeConverter, sharedMemSize);
+    }
+
     int benefit = patternBenefitPrioritizeOverLLVMConversions;
     {
       RewritePatternSet cleanupPatterns(context);
@@ -134,12 +154,19 @@ struct ConvertTritonMetalGPUToLLVM
 
     RewritePatternSet patterns(context);
 
+    mlir::triton::populateConvertLayoutOpToLLVMPatterns(
+        typeConverter, targetInfo, patterns, benefit);
     metal::populateElementwiseOpToLLVMPatterns(
         typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
     metal::populateLoadStoreOpToLLVMPatterns(
         typeConverter, targetInfo, patterns, axisInfoAnalysis, benefit);
+    mlir::triton::populateReduceOpToLLVMPatterns(typeConverter, patterns,
+                                                 targetInfo, benefit);
     mlir::triton::populateViewOpToLLVMPatterns(typeConverter, patterns,
                                                benefit);
+    metal::populateBarrierOpToLLVMPatterns(typeConverter, patterns, benefit);
+    mlir::triton::populateMemoryOpToLLVMPatterns(typeConverter, targetInfo,
+                                                 patterns, benefit);
     mlir::triton::populateMakeRangeOpToLLVMPattern(typeConverter, targetInfo,
                                                    patterns, benefit);
 
@@ -149,6 +176,10 @@ struct ConvertTritonMetalGPUToLLVM
     // this handles program id
     mlir::triton::populateSPMDOpToLLVMPattern(typeConverter, patterns,
                                               targetInfo, benefit);
+
+    // this handles num programs
+    metal::populateSPMDOpToLLVMPattern(typeConverter, patterns, targetInfo,
+                                       benefit);
 
     mlir::arith::populateArithToLLVMConversionPatterns(typeConverter, patterns);
     mlir::populateMathToLLVMConversionPatterns(typeConverter, patterns);
@@ -160,8 +191,33 @@ struct ConvertTritonMetalGPUToLLVM
       return signalPassFailure();
     }
 
+    {
+      RewritePatternSet cleanupPatterns(context);
+      cleanupPatterns.add<UnrealizedCastToLoadPattern>(context, benefit);
+      if (failed(applyPatternsGreedily(mod, std::move(cleanupPatterns))))
+        return signalPassFailure();
+    }
+
     // "or disjoint" op seems to not be supported by metal-as
     mod.walk([](LLVM::OrOp op) { op.setIsDisjoint(false); });
+  }
+
+private:
+  void initSharedMemory(LLVMTypeConverter &typeConverter,
+                        size_t sharedMemSize) {
+    ModuleOp mod = getOperation();
+    OpBuilder b(mod.getBodyRegion());
+    auto ctx = mod.getContext();
+    auto loc = mod.getLoc();
+    auto elemTy = typeConverter.convertType(b.getIntegerType(8));
+    auto arrayTy = LLVM::LLVMArrayType::get(elemTy, sharedMemSize);
+    auto zero = b.getZeroAttr(arrayTy);
+    // Ask for 16B alignment on global_smem because that's the largest we should
+    // ever need (4xi32).
+    auto global = LLVM::GlobalOp::create(b, loc, arrayTy, /*isConstant=*/false,
+                                         LLVM::Linkage::Internal, "global_smem",
+                                         /*value=*/zero, /*alignment=*/16,
+                                         /*addrSpace=*/3);
   }
 };
 

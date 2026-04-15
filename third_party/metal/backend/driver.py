@@ -91,10 +91,12 @@ class MetalUtils:
         _metal_driver.unload_module(module)
 
     def get_device_properties(self, device):
-        # TODO verify these
+        # TODO verify these, try not to hardcode
         return {
             "max_shared_mem": self.device.maxThreadgroupMemoryLength(),
-            "multiprocessor_count": 0,  # n/a
+            "max_num_regs": 128,
+            "warpSize": 32,
+            "multiprocessor_count": 14,
             "mem_clock_rate": 0,  # n/a
             "mem_bus_width": 0,  # n/a
         }

@@ -5,7 +5,7 @@ def rewrite_ptrs(ir: str) -> str:
     # prev: getelementptr float, ptr addrspace(1) %0, i64 %9
     # new: getelementptr float, float addrspace(1)* %0, i64, %9
     ir = re.sub(
-        r"(getelementptr\s+(<\d+\s+x\s+\w+>|\w+)),\s+ptr\s+addrspace\((\d+)\)",
+        r"(getelementptr(?:\s+inbounds)?\s+(<\d+\s+x\s+\w+>|\w+)),\s+ptr\s+addrspace\((\d+)\)",
         lambda m: f"{m.group(1)}, {m.group(2)} addrspace({m.group(3)})*",
         ir,
     )
@@ -37,18 +37,56 @@ def insert_bitcast_for_vecs(ir: str) -> str:
     getelementptr_type_dict: dict[
         str, tuple[str, str]
     ] = {}  # map ptr name (result of getelementptr) to ptr type and addr space
-    for load_match in re.finditer(
-        r"(%\w+)\s*=\s*getelementptr\b[^,\n]*,\s+(<\d+\s+x\s+\w+>|\w+)\s+addrspace\((\d+)\)\*",
+    for gep_match in re.finditer(
+        r"(\s*)(%\w+)\s*=\s*getelementptr\b[^,\n]*,\s+(<\d+\s+x\s+\w+>|\w+)\s+addrspace\((\d+)\)\*",
         ir,
     ):
-        # group(1): ptr var name, result of getelementptr
-        # group(2): ptr type
-        # group(3): addr space
-        getelementptr_type_dict[load_match.group(1)] = (load_match.group(2), load_match.group(3))
+        # group(1): leading spaces
+        # group(2): ptr var name, result of getelementptr
+        # group(3): ptr type
+        # group(4): addr space
+        leading_spaces = gep_match.group(1)
+        ptr_var_name = gep_match.group(2)
+        ptr_type = gep_match.group(3)
+        addrspace = gep_match.group(4)
+        getelementptr_type_dict[ptr_var_name] = (ptr_type, addrspace)
+
+    # get type of @global_smem
+    global_smem_definition_match = re.search(
+        r"@global_smem\s*=\s*\w+\s+addrspace\(\d+\)\s+global\s+(\[\d+\s+x\s+\w+\])", ir
+    )
+    global_smem_type = None
+    if global_smem_definition_match:
+        global_smem_type = global_smem_definition_match.group(1)
+    else:
+        raise RuntimeError("@global_smem definition not found")
 
     cast_idx = 0
     new_lines = []
     for line in ir.split("\n"):
+        gep_match_global_smem = re.match(
+            r"(\s*)(%\w+)\s*=\s*getelementptr\b[^,\n]*,\s+(<\d+\s+x\s+\w+>|\w+)\s+addrspace\((\d+)\)\*\s+([@%]\w+)(.*)",
+            line,
+        )
+        if gep_match_global_smem:
+            leading_spaces = gep_match_global_smem.group(1)
+            ptr_var_name = gep_match_global_smem.group(2)
+            ptr_type = gep_match_global_smem.group(3)
+            addrspace = gep_match_global_smem.group(4)
+            base_ptr = gep_match_global_smem.group(5)
+            remaining = gep_match_global_smem.group(6)
+            if int(addrspace) == 3:
+                assert base_ptr == "@global_smem"
+                cast_result = f"%vec_cast_{cast_idx}"
+                cast_idx += 1
+                new_lines.append(
+                    f"{leading_spaces}{cast_result} = bitcast {global_smem_type} addrspace({addrspace})* {base_ptr} to {ptr_type} addrspace({addrspace})*"
+                )
+                new_lines.append(
+                    f"{leading_spaces}{ptr_var_name} = getelementptr inbounds {ptr_type}, {ptr_type} addrspace({addrspace})* {cast_result}{remaining}"
+                )
+                continue
+
         # search for load from scalar pointer that is the result of getelementptr
         load_match = re.match(
             r"(\s*)(%\w+)\s*=\s*load\s+(<\d+\s+x\s+(\w+)>),\s+<[^>]+>\s+addrspace\((\d+)\)\*\s+(%\w+)(.*)",
@@ -70,6 +108,18 @@ def insert_bitcast_for_vecs(ir: str) -> str:
                 )
                 new_lines.append(
                     f"{leading_spaces}{result_var} = load {vec_type}, {vec_type} addrspace({addrspace})* {cast_result}{remaining}"
+                )
+                continue
+            elif int(addrspace) == 3 and getelementptr_type_dict.get(ptr, (None, None))[0] != vec_type:
+                # if loading from global smem (addrspace 3), then cast global smem ptr
+                cast_result = f"%vec_cast_{cast_idx}"
+                cast_idx += 1
+                global_smem_ptr_type, global_smem_addrspace = getelementptr_type_dict[ptr]
+                new_lines.append(
+                    f"{leading_spaces}{cast_result} = bitcast {global_smem_ptr_type} addrspace({global_smem_addrspace})* {ptr} to {vec_type} addrspace({global_smem_addrspace})*"
+                )
+                new_lines.append(
+                    f"{leading_spaces}load {vec_type}, {vec_type} addrspace({global_smem_addrspace})* {cast_result}{remaining}"
                 )
                 continue
 
@@ -94,6 +144,18 @@ def insert_bitcast_for_vecs(ir: str) -> str:
                 )
                 new_lines.append(
                     f"{leading_spaces}store {vec_type} {val}, {vec_type} addrspace({addrspace})* {cast_result}{remaining}"
+                )
+                continue
+            elif int(addrspace) == 3 and getelementptr_type_dict.get(ptr, (None, None))[0] != vec_type:
+                # if storing into global smem (addrspace 3), then cast global smem ptr
+                cast_result = f"%vec_cast_{cast_idx}"
+                cast_idx += 1
+                global_smem_ptr_type, global_smem_addrspace = getelementptr_type_dict[ptr]
+                new_lines.append(
+                    f"{leading_spaces}{cast_result} = bitcast {global_smem_ptr_type} addrspace({global_smem_addrspace})* {ptr} to {vec_type} addrspace({global_smem_addrspace})*"
+                )
+                new_lines.append(
+                    f"{leading_spaces}store {vec_type} {val}, {vec_type} addrspace({global_smem_addrspace})* {cast_result}{remaining}"
                 )
                 continue
 
@@ -199,7 +261,9 @@ def convert_opaque_ptrs_to_typed(ir: str) -> str:
     # search for getelementptr/load/store instructions to determine types of the ptrs
     ptr_type_dict: dict = {}
     # e.g. getelementptr/load float, ptr addrspace(1) %1
-    for m in re.finditer(r"(?:getelementptr|load)\s+(<\d+\s+x\s+\w+>|\w+),\s+ptr\s+addrspace\((\d+)\)\s+(%\w+)", ir):
+    for m in re.finditer(
+        r"(?:getelementptr(?:\s+inbounds)?|load)\s+(<\d+\s+x\s+\w+>|\w+),\s+ptr\s+addrspace\((\d+)\)\s+(%\w+)", ir
+    ):
         # group(3): var name
         # group(1): ptr type
         # group(2): addr space

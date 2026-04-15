@@ -1,3 +1,4 @@
+#include "TritonMetalGPUToLLVM/MetalKernelArgs.h"
 #include "PatternTritonGPUOpToLLVM.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -5,6 +6,7 @@
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
 
 namespace {
+
 struct GPUThreadIdOpConversion
     : public ConvertOpToLLVMPattern<mlir::gpu::ThreadIdOp> {
   GPUThreadIdOpConversion(LLVMTypeConverter &converter,
@@ -25,8 +27,7 @@ struct GPUThreadIdOpConversion
                     ->getParentOfType<LLVM::LLVMFuncOp>();
     unsigned numArgs = func.getNumArguments();
 
-    // plan to pass thread idx in grid as third to last arg
-    Value threadIdx = func.getArgument(numArgs - 3);
+    Value threadIdx = func.getArgument(numArgs - mlir::triton::metal::kThreadIdxFromEnd);
     auto idxType = rewriter.getIndexType();
     rewriter.replaceOp(threadIdOp, threadIdx);
     return success();
@@ -51,8 +52,7 @@ struct GPUWarpIdOpConversion
                     ->getParentOfType<LLVM::LLVMFuncOp>();
     unsigned numArgs = func.getNumArguments();
 
-    // plan to pass simdgroup index in threadgroup as second to last arg
-    Value simdgroup_idx = func.getArgument(numArgs - 2);
+    Value simdgroup_idx = func.getArgument(numArgs - mlir::triton::metal::kSimdgroupIdxFromEnd);
     auto idxType = rewriter.getIndexType();
     rewriter.replaceOp(warpIdOp, simdgroup_idx);
     return success();

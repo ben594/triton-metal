@@ -1,6 +1,7 @@
 
 
 #include "PatternTritonGPUOpToLLVM.h"
+#include "TritonMetalGPUToLLVM/MetalKernelArgs.h"
 #include "mlir/Conversion/FuncToLLVM/ConvertFuncToLLVM.h"
 #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 #include "mlir/Dialect/LLVMIR/LLVMAttrs.h"
@@ -86,9 +87,12 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
       SmallVector<DictionaryAttr> argAttrs;
       newFuncOp.getAllArgAttrs(argAttrs);
 
-      params.push_back(i32Type);
-      params.push_back(i32Type);
-      params.push_back(i32Type);
+      // add kNumI32ExtraArgs i32 args (num_programs, thread_idx, simdgroup_idx,
+      // threadgroup_idx)
+      // see MetalKernelArgs.h for layout
+      for (int i = 0; i < mlir::triton::metal::kNumI32ExtraArgs; ++i) {
+        params.push_back(i32Type);
+      }
       newFuncOp.setFunctionType(
           LLVM::LLVMFunctionType::get(funcType.getReturnType(), params));
 
@@ -96,15 +100,13 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
       // so need to add additional params to first entry block
       auto &region = newFuncOp.getBody();
       auto loc = funcOp.getLoc();
-      region.addArgument(i32Type, loc);
-      region.addArgument(i32Type, loc);
-      region.addArgument(i32Type, loc);
       auto noundef =
           rewriter.getNamedAttr("llvm.noundef", rewriter.getUnitAttr());
       auto argAttr = DictionaryAttr::get(ctx, {noundef});
-      argAttrs.push_back(argAttr);
-      argAttrs.push_back(argAttr);
-      argAttrs.push_back(argAttr);
+      for (int i = 0; i < mlir::triton::metal::kNumI32ExtraArgs; ++i) {
+        region.addArgument(i32Type, loc);
+        argAttrs.push_back(argAttr);
+      }
       newFuncOp.setAllArgAttrs(argAttrs);
     } else {
       newFuncOp.setPassthroughAttr(
