@@ -3,6 +3,46 @@
 |-------------------- | -------------------- |
 | [![Documentation](https://github.com/triton-lang/triton/actions/workflows/documentation.yml/badge.svg)](https://triton-lang.org/) | [![Wheels](https://github.com/triton-lang/triton/actions/workflows/wheels.yml/badge.svg)](https://github.com/triton-lang/triton/actions/workflows/wheels.yml) |
 
+# Triton-Metal (Metal Backend Fork)
+
+This is a long-running fork of [OpenAI's Triton](https://github.com/triton-lang/triton) that adds an experimental Apple Metal backend for running Triton kernels on Apple Silicon GPUs.
+
+The README of the original Triton library can be found [below](#triton).
+
+## Design
+### Compilation
+Main compilation pipeline for Metal found [here](third_party/metal/backend/compiler.py).
+
+The first two passes are identical to the existing Nvidia and AMD backends:
+- Python -> TTIR
+- TTIR -> TTGIR
+
+The Metal backend diverges here. The following steps are executed in the compilation pipeline:
+- TTGIR -> AIR (LLVM IR with Apple-specific symbols and metadata)
+- AIR -> metallib (uses `xcrun metal` on MacOS)
+
+**_NOTE:_**  At least on Macbook Pro M1, Triton's LLVM and the Metal compiler's LLVM are different versions (Metal compiler uses older version), so some of the LLVM IR that Triton generates is not compatible with `xcrun metal`, such as opaque pointers. This is resolved with regex substitutions, which is probably not ideal.
+
+### Driver
+Driver implementation found [here](third_party/metal/backend/driver.py), with calls the [objective c++ library](third_party/metal/backend/driver.mm) via Pybind.
+
+The driver loads the Metal kernel at runtime from Triton's on-disk cache and caches the kernel in memory. The driver extracts Metal buffers from Pytorch tensors and handles dispatch of the kernel using Pytorch's default Metal command queue.
+
+## Progress
+- [x] 01-vector-add example
+- [x] 02-fused-softmax example
+
+So far, the Metal backend is pretty bare and does not have any specific optimization passes, but compilation works for the first two Triton tutorials.
+
+For 01-vector-add, performance is on par with regular PyTorch running on `mps` backend.
+
+For 02-fused-softmax, performance beats the naive PyTorch kernel on `mps` backend, and is on par with `torch.softmax`.
+
+## Currently Working On
+- [ ] 03-matrix-multiplication example
+
+**_END OF METAL BACKEND README, ORIGINAL README IS BELOW_**
+
 # Triton Conference 2025
 
 ![Triton Banner](https://github.com/user-attachments/assets/b4b6972a-857c-417f-bf2c-f16f38a358c0)
