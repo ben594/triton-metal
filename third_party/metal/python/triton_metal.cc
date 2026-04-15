@@ -1,3 +1,4 @@
+#include "TritonMetalGPUToLLVM/MetalKernelArgs.h"
 #include "TritonMetalGPUToLLVM/Passes.h"
 #include "mlir/Pass/PassManager.h"
 #include "llvm/IR/Constants.h"
@@ -29,9 +30,7 @@ void addAirKernelMetadata(llvm::Module *mod) {
     // build arg metadata
     SmallVector<Metadata *> allArgMetadata;
     unsigned numArgs = func.arg_size();
-    // last 4 are num threadgroups in grid, thread idx in grid, simd idx in
-    // threadgroup, and threadgroup idx in grid, 2 before that are scratch ptrs
-    unsigned numUserArgs = numArgs - 6;
+    unsigned numUserArgs = numArgs - mlir::triton::metal::kNumExtraArgs;
 
     // loop through args and create arg metadata
     for (unsigned i = 0; i < numArgs; i++) {
@@ -78,20 +77,20 @@ void addAirKernelMetadata(llvm::Module *mod) {
         argMetadata.push_back(MDString::get(ctx, "float"));
         argMetadata.push_back(MDString::get(ctx, "air.arg_name"));
         argMetadata.push_back(MDString::get(ctx, "arg_" + std::to_string(i)));
-      } else if (i == numArgs - 4) {
+      } else if (i == numArgs - mlir::triton::metal::kNumProgramsFromEnd) {
         argMetadata.push_back(MDString::get(ctx, "air.threadgroups_per_grid"));
         argMetadata.push_back(MDString::get(ctx, "air.arg_type_name"));
         argMetadata.push_back(MDString::get(ctx, "uint"));
         argMetadata.push_back(MDString::get(ctx, "air.arg_name"));
         argMetadata.push_back(MDString::get(ctx, "num_threadgroups"));
-      } else if (i == numArgs - 3) {
+      } else if (i == numArgs - mlir::triton::metal::kThreadIdxFromEnd) {
         argMetadata.push_back(
             MDString::get(ctx, "air.thread_position_in_grid"));
         argMetadata.push_back(MDString::get(ctx, "air.arg_type_name"));
         argMetadata.push_back(MDString::get(ctx, "uint"));
         argMetadata.push_back(MDString::get(ctx, "air.arg_name"));
         argMetadata.push_back(MDString::get(ctx, "thread_idx"));
-      } else if (i == numArgs - 2) {
+      } else if (i == numArgs - mlir::triton::metal::kSimdgroupIdxFromEnd) {
         argMetadata.push_back(
             MDString::get(ctx, "air.simdgroup_index_in_threadgroup"));
         argMetadata.push_back(MDString::get(ctx, "air.arg_type_name"));

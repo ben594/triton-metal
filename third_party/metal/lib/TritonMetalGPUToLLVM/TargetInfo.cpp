@@ -1,4 +1,5 @@
 #include "TargetInfo.h"
+#include "TritonMetalGPUToLLVM/MetalKernelArgs.h"
 #include "Utility.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "triton/Conversion/TritonGPUToLLVM/Utility.h"
@@ -90,8 +91,7 @@ Value TargetInfo::programId(RewriterBase &rewriter, Location loc,
                   ->getParentOfType<LLVM::LLVMFuncOp>();
   unsigned numArgs = func.getNumArguments();
   if (axis == ProgramIDDim::X) {
-    // plan to pass threadgroup idx in grid as last arg
-    return func.getArgument(numArgs - 1);
+    return func.getArgument(numArgs - mlir::triton::metal::kThreadgroupIdxFromEnd);
   }
   llvm_unreachable("Only X axis supported for now");
 }
@@ -103,8 +103,7 @@ Value TargetInfo::numPrograms(RewriterBase &rewriter, Location loc,
                   ->getParentOfType<LLVM::LLVMFuncOp>();
   unsigned numArgs = func.getNumArguments();
   if (axis == ProgramIDDim::X) {
-    // plan to pass number of threadgroups in grid as arg
-    return func.getArgument(numArgs - 4);
+    return func.getArgument(numArgs - mlir::triton::metal::kNumProgramsFromEnd);
   }
   llvm_unreachable("Only X axis supported for now");
 }
