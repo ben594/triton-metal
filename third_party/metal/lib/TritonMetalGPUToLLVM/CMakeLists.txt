@@ -16,3 +16,6 @@ add_triton_library(TritonMetalGPUToLLVM
     LINK_LIBS PUBLIC
     TritonMetalAnalysis
 )
+
+target_include_directories(TritonMetalGPUToLLVM PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/../../include)
+target_include_directories(TritonMetalGPUToLLVM PUBLIC ${CMAKE_CURRENT_BINARY_DIR}/../../include)
