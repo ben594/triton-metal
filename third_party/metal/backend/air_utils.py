@@ -29,11 +29,7 @@ def rewrite_ptrs(ir: str) -> str:
     return ir
 
 
-def insert_bitcast_for_vecs(ir: str) -> str:
-    # insert bitcast when loading vector from scalar ptr that is result of getelementptr
-    # e.g.
-    # %54 = getelementptr float, float addrspace(1)* %52, i64 %53
-    # %62 = load <1 x float>, <1 x float> addrspace(1)* %54, align 4
+def generate_getelementptr_type_dict(ir: str) -> dict:
     getelementptr_type_dict: dict[
         str, tuple[str, str]
     ] = {}  # map ptr name (result of getelementptr) to ptr type and addr space
@@ -45,11 +41,20 @@ def insert_bitcast_for_vecs(ir: str) -> str:
         # group(2): ptr var name, result of getelementptr
         # group(3): ptr type
         # group(4): addr space
-        leading_spaces = gep_match.group(1)
         ptr_var_name = gep_match.group(2)
         ptr_type = gep_match.group(3)
         addrspace = gep_match.group(4)
         getelementptr_type_dict[ptr_var_name] = (ptr_type, addrspace)
+
+    return getelementptr_type_dict
+
+
+def insert_bitcast_for_vecs(ir: str, getelementptr_type_dict: dict, struct_type_dict: dict) -> str:
+    breakpoint()
+    # insert bitcast when loading vector from scalar ptr that is result of getelementptr
+    # e.g.
+    # %54 = getelementptr float, float addrspace(1)* %52, i64 %53
+    # %62 = load <1 x float>, <1 x float> addrspace(1)* %54, align 4
 
     # get type of @global_smem
     global_smem_definition_match = re.search(
@@ -76,6 +81,7 @@ def insert_bitcast_for_vecs(ir: str) -> str:
             base_ptr = gep_match_global_smem.group(5)
             remaining = gep_match_global_smem.group(6)
             if int(addrspace) == 3:
+                # breakpoint()
                 assert base_ptr == "@global_smem"
                 cast_result = f"%vec_cast_{cast_idx}"
                 cast_idx += 1
@@ -87,7 +93,7 @@ def insert_bitcast_for_vecs(ir: str) -> str:
                 )
                 continue
 
-        # search for load from scalar pointer that is the result of getelementptr
+        # search for load from scalar pointer that is the result of getelementptr or extractvalue
         load_match = re.match(
             r"(\s*)(%\w+)\s*=\s*load\s+(<\d+\s+x\s+(\w+)>),\s+<[^>]+>\s+addrspace\((\d+)\)\*\s+(%\w+)(.*)",
             line,
@@ -101,6 +107,16 @@ def insert_bitcast_for_vecs(ir: str) -> str:
             ptr = load_match.group(6)
             remaining = load_match.group(7)
             if getelementptr_type_dict.get(ptr) == (scalar_elem, addrspace):
+                cast_result = f"%vec_cast_{cast_idx}"
+                cast_idx += 1
+                new_lines.append(
+                    f"{leading_spaces}{cast_result} = bitcast {scalar_elem} addrspace({addrspace})* {ptr} to {vec_type} addrspace({addrspace})*"
+                )
+                new_lines.append(
+                    f"{leading_spaces}{result_var} = load {vec_type}, {vec_type} addrspace({addrspace})* {cast_result}{remaining}"
+                )
+                continue
+            elif struct_type_dict.get(ptr) == f"{scalar_elem} addrspace({addrspace})*":
                 cast_result = f"%vec_cast_{cast_idx}"
                 cast_idx += 1
                 new_lines.append(
@@ -246,6 +262,93 @@ def rewrite_metadata(ir: str) -> str:
     return ir
 
 
+def convert_opaque_ptrs_insertvalue(ir: str, getelementptr_type_dict: dict) -> tuple[str, dict]:
+    new_lines = []
+
+    # contains types for results of insertvalue
+    struct_type_dict = {}
+    for line in ir.split("\n"):
+        insertvalue_match = re.match(
+            r"(?P<indent>\s*)(?P<result>%\w+)\s*=\s*insertvalue\s+(?P<agg_type>\{[^}]+\})\s+(?P<struct_vals>\S+),\s*(?P<elem_type>ptr\s+addrspace\((?P<addrspace>\d+)\))\s+(?P<elem_val>%\w+),\s*(?P<idx>\d+)",
+            line,
+        )
+        if insertvalue_match:
+            # breakpoint()
+            elem_val = insertvalue_match.group("elem_val")
+            if elem_val in getelementptr_type_dict:
+                elem_type, addrspace = getelementptr_type_dict[elem_val]
+
+                typed_ptr = f"{elem_type} addrspace({addrspace})*"
+                new_agg_type = insertvalue_match.group("agg_type").replace(
+                    "ptr addrspace(" + addrspace + ")", typed_ptr
+                )
+                # breakpoint()
+
+                new_line = (
+                    f"{insertvalue_match.group('indent')}{insertvalue_match.group('result')} = insertvalue {new_agg_type} "
+                    f"{insertvalue_match.group('struct_vals')}, {typed_ptr} {insertvalue_match.group('elem_val')}, {insertvalue_match.group('idx')}"
+                )
+                new_lines.append(new_line)
+
+                # track struct type in dict
+                struct_type_dict[insertvalue_match.group("result")] = new_agg_type
+            else:
+                raise RuntimeError(
+                    f"Elem val {elem_val} was not found in getelementptr_type_dict, perhaps this pointer was created from a different operation (not getelementptr)"
+                )
+        else:
+            new_lines.append(line)
+
+    ir = "\n".join(new_lines)
+    return ir, struct_type_dict
+
+
+def convert_opaque_ptrs_phi(ir: str, struct_type_dict: dict) -> tuple[str, dict]:
+    new_lines = []
+    for line in ir.split("\n"):
+        phi_match = re.match(
+            r"(?P<indent>\s*)(?P<result>%\w+)\s*=\s*phi\s+(?P<agg_type>\{[^}]+\})\s+(?P<pairs>.*)",
+            line,
+        )
+        if phi_match and "ptr addrspace" in phi_match.group("agg_type"):
+            incoming_vals = re.findall(r"\[\s*(%\w+),\s*%\w+\s*\]", phi_match.group("pairs"))
+            new_agg_type = next((struct_type_dict[v] for v in incoming_vals if v in struct_type_dict), None)
+            if new_agg_type:
+                new_line = f"{phi_match.group('indent')}{phi_match.group('result')} = phi {new_agg_type} {phi_match.group('pairs')}"
+                new_lines.append(new_line)
+                # track so downstream can use this result
+                struct_type_dict[phi_match.group("result")] = new_agg_type
+            else:
+                raise RuntimeError(f"Could not determine struct element type for phi: {line.strip()}")
+        else:
+            new_lines.append(line)
+
+    ir = "\n".join(new_lines)
+    return ir, struct_type_dict
+
+
+def convert_opaque_ptrs_extractvalue(ir: str, struct_type_dict: dict) -> tuple[str, dict]:
+    new_lines = []
+    for line in ir.split("\n"):
+        extractvalue_match = re.match(
+            r"(?P<indent>\s*)(?P<result>%\w+)\s*=\s*extractvalue\s+(?P<agg_type>\{[^}]+\})\s+(?P<agg_val>%\w+),\s*(?P<idx>\d+)",
+            line,
+        )
+        if extractvalue_match and "ptr addrspace" in extractvalue_match.group("agg_type"):
+            agg_val = extractvalue_match.group("agg_val")
+            new_agg_type = struct_type_dict.get(agg_val)
+            if new_agg_type:
+                new_line = f"{extractvalue_match.group('indent')}{extractvalue_match.group('result')} = extractvalue {new_agg_type} {agg_val}, {extractvalue_match.group('idx')}"
+                new_lines.append(new_line)
+                fields = [f.strip() for f in new_agg_type.strip("{}").split(",")]
+                struct_type_dict[extractvalue_match.group("result")] = fields[int(extractvalue_match.group("idx"))]
+            else:
+                raise RuntimeError(f"Could not determine struct element type for extractvalue: {line.strip()}")
+        else:
+            new_lines.append(line)
+    return "\n".join(new_lines), struct_type_dict
+
+
 def convert_opaque_ptrs_to_typed(ir: str) -> str:
     """Convert opaque ptrs to typed ptrs
 
@@ -278,9 +381,23 @@ def convert_opaque_ptrs_to_typed(ir: str) -> str:
     # rewrite ptrs to include types
     ir = rewrite_ptrs(ir)
 
-    ir = insert_bitcast_for_vecs(ir)
-    # TODO handle cases when loading vec from ptr that is not result of getelementptr?
+    getelementptr_type_dict = generate_getelementptr_type_dict(ir)
 
+    # handle insertvalue with opaque ptrs
+    ir, struct_type_dict = convert_opaque_ptrs_insertvalue(ir, getelementptr_type_dict)
+
+    # handle phi with opaque ptrs
+    # TODO this only works for phi ops that use results of insertvalue as input values
+    # the types of these input values are stored in struct_type_dict
+    ir, struct_type_dict = convert_opaque_ptrs_phi(ir, struct_type_dict)
+
+    # handle extractvalue with opaque ptrs
+    ir, struct_type_dict = convert_opaque_ptrs_extractvalue(ir, struct_type_dict)
+
+    # need to do this after converting opaque ptrs for insertvalue/phi/extractvalue
+    ir = insert_bitcast_for_vecs(ir, getelementptr_type_dict, struct_type_dict)
+
+    # TODO handle cases when loading vec from ptr that is not result of getelementptr?
     ir = modify_func_signature(ir, ptr_type_dict)
     ir = rewrite_metadata(ir)
 
