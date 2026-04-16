@@ -25,7 +25,10 @@ class MetalOptions:
     # TODO add more metal-specific options as needed
     backend_name: str = "metal"
     num_warps: int = 4
+    num_stages: int = 1
     num_ctas: int = 1
+    default_dot_input_precision: str = "ieee"
+    allowed_dot_input_precisions: Tuple[str] = ("ieee",)
     warp_size: int = 32  # SIMD group size
     sanitize_overflow: bool = True  # TODO copied from AMD, modify if needed
     debug: bool = False
