@@ -349,6 +349,29 @@ def convert_opaque_ptrs_extractvalue(ir: str, struct_type_dict: dict) -> tuple[s
     return "\n".join(new_lines), struct_type_dict
 
 
+def convert_opaque_ptrs_ptrtoint(ir: str, getelementptr_type_dict: dict) -> str:
+    new_lines = []
+    for line in ir.split("\n"):
+        ptrtoint_match = re.match(
+            r"(?P<indent>\s*)(?P<result>%\w+)\s*=\s*ptrtoint\s+ptr\s+addrspace\((?P<addrspace>\d+)\)\s+(?P<ptr_val>%\w+)\s+to\s+(?P<int_type>\w+)",
+            line,
+        )
+        if ptrtoint_match:
+            ptr_val = ptrtoint_match.group("ptr_val")
+            if ptr_val in getelementptr_type_dict:
+                elem_type, addrspace = getelementptr_type_dict[ptr_val]
+                typed_ptr = f"{elem_type} addrspace({addrspace})*"
+                new_line = f"{ptrtoint_match.group('indent')}{ptrtoint_match.group('result')} = ptrtoint {typed_ptr} {ptr_val} to {ptrtoint_match.group('int_type')}"
+                new_lines.append(new_line)
+            else:
+                raise RuntimeError(
+                    f"Ptr val {ptr_val} was not found in getelementptr_type_dict for ptrtoint: {line.strip()}"
+                )
+        else:
+            new_lines.append(line)
+    return "\n".join(new_lines)
+
+
 def convert_opaque_ptrs_to_typed(ir: str) -> str:
     """Convert opaque ptrs to typed ptrs
 
@@ -393,6 +416,10 @@ def convert_opaque_ptrs_to_typed(ir: str) -> str:
 
     # handle extractvalue with opaque ptrs
     ir, struct_type_dict = convert_opaque_ptrs_extractvalue(ir, struct_type_dict)
+
+    # handle ptrtoint with opaque ptrs
+    # TODO this only works for ptrtoint where the ptr is result of getelementptr
+    ir = convert_opaque_ptrs_ptrtoint(ir, getelementptr_type_dict)
 
     # need to do this after converting opaque ptrs for insertvalue/phi/extractvalue
     ir = insert_bitcast_for_vecs(ir, getelementptr_type_dict, struct_type_dict)
