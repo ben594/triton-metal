@@ -29,17 +29,21 @@ Driver implementation found [here](third_party/metal/backend/driver.py), with ca
 The driver loads the Metal kernel at runtime from Triton's on-disk cache and caches the kernel in memory. The driver extracts Metal buffers from Pytorch tensors and handles dispatch of the kernel using Pytorch's default Metal command queue.
 
 ## Progress
-- [x] 01-vector-add example
-- [x] 02-fused-softmax example
+- [x] 01-vector-add
+- [x] 02-fused-softmax
+- [x] 03-matrix-multiplication (works but performance not good)
 
 So far, the Metal backend is pretty bare and does not have any specific optimization passes, but compilation works for the first two Triton tutorials.
 
-For 01-vector-add, performance is on par with regular PyTorch running on `mps` backend.
+`01-vector-add` performance is on par with regular PyTorch running on `mps` backend.
 
-For 02-fused-softmax, performance beats the naive PyTorch kernel on `mps` backend, and is on par with `torch.softmax`.
+`02-fused-softmax` performance beats the naive PyTorch kernel on `mps` backend, and is on par with `torch.softmax`.
+
+`03-matrix-multiplication` works but performance is worse than PyTorch on `mps`, probably due to no SIMD optimization for dot product.
 
 ## Currently Working On
-- [ ] 03-matrix-multiplication example
+- [ ] `03-matrix-multiplication` performance improvement
+- [ ] `04-low-memory-dropout`
 
 **_END OF METAL BACKEND README, ORIGINAL README IS BELOW_**
 
