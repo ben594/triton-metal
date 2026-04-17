@@ -161,6 +161,14 @@ def is_cuda():
     return triton.runtime.driver.active.get_current_target().backend == "cuda"
 
 
+def is_hip():
+    return triton.runtime.driver.active.get_current_target().backend == "hip"
+
+
+def is_metal():
+    return triton.runtime.driver.active.get_current_target().backend == "metal"
+
+
 def get_cuda_autotune_config():
     return [
         triton.Config({'BLOCK_SIZE_M': 128, 'BLOCK_SIZE_N': 256, 'BLOCK_SIZE_K': 64, 'GROUP_SIZE_M': 8}, num_stages=3,
@@ -213,11 +221,31 @@ def get_hip_autotune_config():
     return [triton.Config(s | {'matrix_instr_nonkdim': 16}, num_warps=8, num_stages=2) for s in sizes]
 
 
+def get_metal_autotune_config():
+    sizes = [
+        {"BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 128, "BLOCK_SIZE_K": 32, "GROUP_SIZE_M": 8, "num_warps": 8},
+        {"BLOCK_SIZE_M": 128, "BLOCK_SIZE_N": 64, "BLOCK_SIZE_K": 32, "GROUP_SIZE_M": 8, "num_warps": 4},
+        {"BLOCK_SIZE_M": 64, "BLOCK_SIZE_N": 128, "BLOCK_SIZE_K": 32, "GROUP_SIZE_M": 8, "num_warps": 4},
+        {"BLOCK_SIZE_M": 64, "BLOCK_SIZE_N": 64, "BLOCK_SIZE_K": 32, "GROUP_SIZE_M": 8, "num_warps": 4},
+        {"BLOCK_SIZE_M": 64, "BLOCK_SIZE_N": 64, "BLOCK_SIZE_K": 32, "GROUP_SIZE_M": 4, "num_warps": 2},
+        {"BLOCK_SIZE_M": 64, "BLOCK_SIZE_N": 32, "BLOCK_SIZE_K": 32, "GROUP_SIZE_M": 8, "num_warps": 2},
+        {"BLOCK_SIZE_M": 32, "BLOCK_SIZE_N": 64, "BLOCK_SIZE_K": 32, "GROUP_SIZE_M": 8, "num_warps": 2},
+        {"BLOCK_SIZE_M": 32, "BLOCK_SIZE_N": 32, "BLOCK_SIZE_K": 32, "GROUP_SIZE_M": 4, "num_warps": 2},
+    ]
+    return [
+        triton.Config({k: v for k, v in s.items() if k != "num_warps"}, num_warps=s["num_warps"], num_stages=1)
+        for s in sizes
+    ]
+
+
 def get_autotune_config():
     if is_cuda():
         return get_cuda_autotune_config()
-    else:
+    elif is_hip():
         return get_hip_autotune_config()
+    elif is_metal():
+        return get_metal_autotune_config()
+    raise RuntimeError("Unrecognized backend")
 
 
 # `triton.jit`'ed functions can be auto-tuned by using the `triton.autotune` decorator, which consumes:
@@ -396,10 +424,17 @@ if TORCH_HAS_FP8 and is_cuda():
 # Square Matrix Performance
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~
 #
-# We can now compare the performance of our kernel against that of cuBLAS or rocBLAS. Here we focus on square matrices,
+# We can now compare the performance of our kernel against that of cuBLAS, rocBLAS, or mps. Here we focus on square matrices,
 # but feel free to arrange this script as you wish to benchmark any other matrix shape.
 
-ref_lib = 'cuBLAS' if is_cuda() else 'rocBLAS'
+if is_cuda():
+    ref_lib = 'cuBLAS'
+elif is_hip():
+    ref_lib = 'rocBLAS'
+elif is_metal():
+    ref_lib = 'mps'
+else:
+    ref_lib = ''
 
 configs = []
 for fp8_inputs in [False, True]:
