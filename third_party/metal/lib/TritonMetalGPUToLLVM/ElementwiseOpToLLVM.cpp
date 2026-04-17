@@ -1,5 +1,6 @@
 #include "PatternTritonGPUOpToLLVM.h"
 #include "TargetInfo.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "triton/Conversion/TritonGPUToLLVM/ElementwiseOpToLLVMBase.h"
 #include "triton/Conversion/TritonGPUToLLVM/PatternTritonGPUOpToLLVM.h"
 
@@ -25,6 +26,7 @@ void mlir::triton::metal::populateElementwiseOpToLLVMPatterns(
 
   POPULATE_OP(arith::ExtFOp, LLVM::FPExtOp);
   POPULATE_OP(arith::TruncFOp, LLVM::FPTruncOp);
+  POPULATE_OP(arith::SIToFPOp, LLVM::SIToFPOp);
 
 #undef POPULATE_OP
 }

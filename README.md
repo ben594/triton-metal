@@ -10,6 +10,8 @@ This is a long-running fork of [OpenAI's Triton](https://github.com/triton-lang/
 The README of the original Triton library can be found [below](#triton).
 
 ## Design
+The implementation of the backend for Apple GPUs can be found in [this directory](third_party/metal/backend/).
+
 ### Compilation
 Main compilation pipeline for Metal found [here](third_party/metal/backend/compiler.py).
 
@@ -32,18 +34,24 @@ The driver loads the Metal kernel at runtime from Triton's on-disk cache and cac
 - [x] 01-vector-add
 - [x] 02-fused-softmax
 - [x] 03-matrix-multiplication (works but performance not good)
+- [x] 04-low-memory-dropout
 
+### Notes:
 So far, the Metal backend is pretty bare and does not have any specific optimization passes, but compilation works for the first two Triton tutorials.
 
-`01-vector-add` performance is on par with regular PyTorch running on `mps` backend.
+- `01-vector-add` performance is on par with regular PyTorch running on `mps` backend.
 
-`02-fused-softmax` performance beats the naive PyTorch kernel on `mps` backend, and is on par with `torch.softmax`.
+- `02-fused-softmax` performance beats the naive PyTorch kernel on `mps` backend, and is on par with `torch.softmax`.
 
-`03-matrix-multiplication` works but performance is worse than PyTorch on `mps`, probably due to no SIMD optimization for dot product.
+- `03-matrix-multiplication` works but performance is worse than PyTorch on `mps`, probably due to no SIMD optimization for dot product.
 
 ## Currently Working On
 - [ ] `03-matrix-multiplication` performance improvement
-- [ ] `04-low-memory-dropout`
+- [ ] `05-layer-norm`
+
+## Current Limitations
+- The Metal backend has currently only been tested on Macbook Pro with M1 Pro chip. Some parameters may be hardcoded, and this backend is not guaranteed to work for newer chips or other versions of MacOS/Metal.
+- Only 1D grids supported currently.
 
 **_END OF METAL BACKEND README, ORIGINAL README IS BELOW_**
 
