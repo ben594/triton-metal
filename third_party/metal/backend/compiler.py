@@ -150,6 +150,10 @@ class MetalBackend(BaseBackend):
         for orig, new_attr in llvm_attributes_replacements.items():
             ret = ret.replace(orig, new_attr)
 
+        # strip memory(...) attrs (e.g. memory(inaccessiblemem: write))
+        # that older LLVM can't parse
+        ret = re.sub(r"\bmemory\([^)]*:[^)]*\)", "", ret)
+
         # convert LLVM 17+ splat syntax to old vector constant format
         # xcrun metal uses old LLVM: use <type val> instead of splat(type val)
         ret = re.sub(r"splat\s*\(([^)]+)\)", r"<\1>", ret)

@@ -50,7 +50,6 @@ def generate_getelementptr_type_dict(ir: str) -> dict:
 
 
 def insert_bitcast_for_vecs(ir: str, getelementptr_type_dict: dict, struct_type_dict: dict) -> str:
-    breakpoint()
     # insert bitcast when loading vector from scalar ptr that is result of getelementptr
     # e.g.
     # %54 = getelementptr float, float addrspace(1)* %52, i64 %53
@@ -81,7 +80,6 @@ def insert_bitcast_for_vecs(ir: str, getelementptr_type_dict: dict, struct_type_
             base_ptr = gep_match_global_smem.group(5)
             remaining = gep_match_global_smem.group(6)
             if int(addrspace) == 3:
-                # breakpoint()
                 assert base_ptr == "@global_smem"
                 cast_result = f"%vec_cast_{cast_idx}"
                 cast_idx += 1
@@ -262,6 +260,7 @@ def rewrite_metadata(ir: str) -> str:
     return ir
 
 
+# TODO can probably combine insertvalue/phi/extractvalue ptr conversions into one pass over the lines in the ir
 def convert_opaque_ptrs_insertvalue(ir: str, getelementptr_type_dict: dict) -> tuple[str, dict]:
     new_lines = []
 
@@ -273,7 +272,6 @@ def convert_opaque_ptrs_insertvalue(ir: str, getelementptr_type_dict: dict) -> t
             line,
         )
         if insertvalue_match:
-            # breakpoint()
             elem_val = insertvalue_match.group("elem_val")
             if elem_val in getelementptr_type_dict:
                 elem_type, addrspace = getelementptr_type_dict[elem_val]
@@ -282,7 +280,6 @@ def convert_opaque_ptrs_insertvalue(ir: str, getelementptr_type_dict: dict) -> t
                 new_agg_type = insertvalue_match.group("agg_type").replace(
                     "ptr addrspace(" + addrspace + ")", typed_ptr
                 )
-                # breakpoint()
 
                 new_line = (
                     f"{insertvalue_match.group('indent')}{insertvalue_match.group('result')} = insertvalue {new_agg_type} "
@@ -372,6 +369,43 @@ def convert_opaque_ptrs_ptrtoint(ir: str, getelementptr_type_dict: dict) -> str:
     return "\n".join(new_lines)
 
 
+# this is special case since ptr type is only known after the inttoptr operation
+def convert_opaque_ptrs_inttoptr(ir: str) -> str:
+    # first find all the inttoptr lines and track the result variables (ptrs)
+    # map result var to line
+    inttoptr_results = {}  # result_var -> (idx, match)
+    lines = ir.split("\n")
+    for idx, line in enumerate(lines):
+        inttoptr_match = re.match(
+            r"(?P<indent>\s*)(?P<result>%\w+)\s*=\s*inttoptr\s+(?P<int_type>\w+)\s+(?P<int_val>%\w+)\s+to\s+ptr\s+addrspace\((?P<addrspace>\d+)\)",
+            line,
+        )
+        if inttoptr_match:
+            result_var = inttoptr_match.group("result")
+            inttoptr_results[result_var] = (idx, inttoptr_match)
+
+    # search for where getelementptr contains these inttoptr results as input
+    inttoptr_ptr_types = {}
+    for gep_match in re.finditer(
+        r"(?P<indent>\s*)(?P<result>%\w+)\s*=\s*getelementptr(?P<inbounds>\s+inbounds)?\s+(?P<elem_type>\w+),\s+(?P<ptr_type>\w+)\s+addrspace\((?P<addrspace>\d+)\)\*\s+(?P<ptr_val>[%@]\w+),\s+(?P<idx_type>\w+)\s+(?P<idx_val>[%@]\w+)",
+        ir,
+    ):
+        ptr_val = gep_match.group("ptr_val")
+        if ptr_val in inttoptr_results:
+            addrspace = gep_match.group("addrspace")
+            inttoptr_ptr_types[ptr_val] = f"{gep_match.group('elem_type')} addrspace({addrspace})*"
+
+    new_lines = lines[:]
+    for result_ptr, (idx, m) in inttoptr_results.items():
+        assert result_ptr in inttoptr_ptr_types, f"Result ptr {result_ptr} not found in inttoptr_ptr_types"
+        ptr_type = inttoptr_ptr_types[result_ptr]
+        new_lines[idx] = (
+            f"{m.group('indent')}{m.group('result')} = inttoptr {m.group('int_type')} {m.group('int_val')} to {ptr_type}"
+        )
+
+    return "\n".join(new_lines)
+
+
 def convert_opaque_ptrs_to_typed(ir: str) -> str:
     """Convert opaque ptrs to typed ptrs
 
@@ -420,6 +454,11 @@ def convert_opaque_ptrs_to_typed(ir: str) -> str:
     # handle ptrtoint with opaque ptrs
     # TODO this only works for ptrtoint where the ptr is result of getelementptr
     ir = convert_opaque_ptrs_ptrtoint(ir, getelementptr_type_dict)
+
+    # need to convert inttoptr last
+    # this is special case since ptr type is only known after the inttoptr operation
+    # usually getelementptr is called on result of inttoptr
+    ir = convert_opaque_ptrs_inttoptr(ir)
 
     # need to do this after converting opaque ptrs for insertvalue/phi/extractvalue
     ir = insert_bitcast_for_vecs(ir, getelementptr_type_dict, struct_type_dict)
