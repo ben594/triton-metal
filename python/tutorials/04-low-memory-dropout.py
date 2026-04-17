@@ -85,6 +85,11 @@ print(tabulate.tabulate([
     ["output"] + output.tolist(),
 ]))
 
+# correctness: compare against PyTorch
+ref_output = torch.where(x_keep.bool(), x / (1 - p), torch.zeros_like(x))
+torch.testing.assert_close(output, ref_output)
+print("Masked dropout correctness: PASSED")
+
 # %%
 # Seeded dropout
 # --------------
@@ -153,6 +158,21 @@ print(
         ["output (seed = 123)"] + output2.tolist(),
         ["output (seed = 512)"] + output3.tolist(),
     ]))
+
+# correctness for seeded dropout:
+# same seed has identical output
+torch.testing.assert_close(output, output2)
+print("Seeded dropout determinism check (same seed): PASSED")
+
+# different seeds have different masks
+assert not torch.equal(output, output3), "Different seeds have identical output"
+print("Seeded dropout non-determinism check (different seed): PASSED")
+
+# non-zero elements must equal x / (1 - p), zeros must be exactly 0
+keep_mask = output != 0
+torch.testing.assert_close(output[keep_mask], x[keep_mask] / (1 - 0.5))
+assert (output[~keep_mask] == 0).all()
+print("Seeded dropout scaling correctness check: PASSED")
 
 # %%
 # Et Voilà! We have a triton kernel that applies the same dropout mask provided the seed is the same!
