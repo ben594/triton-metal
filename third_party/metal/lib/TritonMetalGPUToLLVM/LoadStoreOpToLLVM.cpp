@@ -8,11 +8,26 @@
 
 using namespace mlir;
 using namespace mlir::triton::gpu;
+using ::mlir::LLVM::getSharedMemoryBase;
 using ::mlir::LLVM::metal::getVectorSize;
 using ::mlir::LLVM::metal::llLoad;
 using ::mlir::LLVM::metal::llStore;
 
 namespace {
+
+// TODO make sure these are correct, copied from AMD
+std::optional<const char *> getMetalGPUMemScopeStr(MemSyncScope scope) {
+  switch (scope) {
+  case MemSyncScope::GPU:
+    return "agent";
+  case MemSyncScope::CTA:
+    return "workgroup";
+  case MemSyncScope::SYSTEM:
+  default:
+    return "";
+  }
+}
+
 Value emitRedundantThreadPredicateNonNull(
     const llvm::MapVector<StringAttr, int32_t> &freeVarMasks,
     ConversionPatternRewriter &rewriter, Location loc,
@@ -259,6 +274,302 @@ struct StoreOpConversion : public ConvertOpToLLVMPattern<triton::StoreOp>,
     return success();
   }
 };
+
+struct AtomicCASOpConversion
+    : public ConvertOpToLLVMPattern<triton::AtomicCASOp>,
+      public LoadStoreConversionBase {
+  AtomicCASOpConversion(LLVMTypeConverter &converter,
+                        const metal::TargetInfo &targetInfo,
+                        ModuleAxisInfoAnalysis &axisAnalysisPass,
+                        PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit),
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
+
+  LogicalResult
+  matchAndRewrite(triton::AtomicCASOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    MLIRContext *ctx = rewriter.getContext();
+
+    Value llPtr = adaptor.getPtr();
+    Value llCmp = adaptor.getCmp();
+    Value llVal = adaptor.getVal();
+
+    // prep data by unpacking to get data ready
+    auto ptrElements = unpackLLElements(loc, llPtr, rewriter);
+    auto cmpElements = unpackLLElements(loc, llCmp, rewriter);
+    auto valElements = unpackLLElements(loc, llVal, rewriter);
+
+    auto memOrdering = op.getSem();
+    auto atomicMemOrdering = getMemoryOrdering(memOrdering);
+    if (!atomicMemOrdering)
+      return rewriter.notifyMatchFailure(op,
+                                         "Unknown Metal GPU memory ordering");
+    auto scope = getMetalGPUMemScopeStr(op.getScope());
+    if (!scope)
+      return rewriter.notifyMatchFailure(op, "Unknown Metal GPU memory scope");
+
+    // deal with tensor or scalar
+    auto valueTy = op.getResult().getType();
+    auto tensorTy = dyn_cast<RankedTensorType>(valueTy);
+    Type valueElemTy =
+        tensorTy ? getTypeConverter()->convertType(tensorTy.getElementType())
+                 : valueTy;
+    auto valueElemNBits = valueElemTy.getIntOrFloatBitWidth();
+    Type valueElemIntTy{};
+    if (!valueElemTy.isSignlessInteger()) {
+      valueElemIntTy = rewriter.getIntegerType(valueElemNBits);
+    }
+    auto elemsPerThread = getTotalElemsPerThread(op.getVal().getType());
+    SmallVector<Value> resultVals(elemsPerThread);
+
+    auto successOrdering = *atomicMemOrdering;
+    auto failureOrdering = LLVM::AtomicOrdering::monotonic;
+    auto scopeStr = StringRef(scope.value());
+
+    auto freeVarMasks = getFreeVariableMasks(op.getPtr().getType());
+    Value threadPred = emitRedundantThreadPredicateNonNull(
+        freeVarMasks, rewriter, loc, targetInfo);
+    uint32_t regMask = freeVarMasks[str_attr("reg")];
+
+    // atomic ops
+    for (size_t i = 0; i < elemsPerThread; i += 1) {
+      if (tensorTy && (i & ~regMask) != i) {
+        resultVals[i] = resultVals[i & ~regMask];
+        continue;
+      }
+
+      Value casVal = valElements[i];
+      Value casCmp = cmpElements[i];
+      Value casPtr = ptrElements[i];
+      if (valueElemIntTy) {
+        casVal = LLVM::BitcastOp::create(rewriter, loc, valueElemIntTy, casVal);
+        casCmp = LLVM::BitcastOp::create(rewriter, loc, valueElemIntTy, casCmp);
+      }
+      // use op
+      if (tensorTy) { // for tensor
+        Value undefVal = b.undef(valueElemTy);
+        auto *curBlock = rewriter.getInsertionBlock();
+        auto *endBlock = curBlock->splitBlock(rewriter.getInsertionPoint());
+        auto *atomicBlock = rewriter.createBlock(
+            curBlock->getParent(), std::next(Region::iterator(curBlock)));
+        endBlock->addArgument({valueElemTy}, {loc});
+
+        rewriter.setInsertionPointToEnd(curBlock);
+        LLVM::CondBrOp::create(rewriter, loc, threadPred, atomicBlock, endBlock,
+                               undefVal);
+
+        rewriter.setInsertionPointToEnd(atomicBlock);
+
+        auto cmpxchg = LLVM::AtomicCmpXchgOp::create(
+            rewriter, loc, casPtr, casCmp, casVal, successOrdering,
+            failureOrdering, scopeStr);
+
+        // Extract the new_loaded value from the pair.
+        Value ret;
+        if (valueElemIntTy) {
+          ret = b.extract_val(valueElemIntTy, cmpxchg, 0);
+          ret = LLVM::BitcastOp::create(rewriter, loc, valueElemTy, ret);
+        } else {
+          ret = b.extract_val(valueElemTy, cmpxchg, 0);
+        }
+
+        LLVM::BrOp::create(rewriter, loc, ret, endBlock);
+        rewriter.setInsertionPointToStart(endBlock);
+        resultVals[i] = endBlock->getArgument(0);
+      } else { // for scalar
+        // Build blocks to bypass the atomic instruction for ~rmwMask.
+        auto *curBlock = rewriter.getInsertionBlock();
+        auto *endBlock = curBlock->splitBlock(rewriter.getInsertionPoint());
+        auto *atomicBlock = rewriter.createBlock(
+            curBlock->getParent(), std::next(Region::iterator(curBlock)));
+
+        // Fill entry block with global memory barrier and conditional branch.
+        rewriter.setInsertionPointToEnd(curBlock);
+        auto tid = getThreadId(rewriter, loc);
+        Value pred = b.icmp_eq(tid, b.i32_val(i));
+        LLVM::CondBrOp::create(rewriter, loc, pred, atomicBlock, endBlock);
+
+        // Build main block with atomic_cmpxchg.
+        rewriter.setInsertionPointToEnd(atomicBlock);
+
+        auto cmpxchg = LLVM::AtomicCmpXchgOp::create(
+            rewriter, loc, casPtr, casCmp, casVal, successOrdering,
+            failureOrdering, scopeStr);
+
+        if (!op.getResult().use_empty()) {
+          // Extract the new_loaded value from the pair.
+          Value newLoaded;
+          if (valueElemIntTy) {
+            newLoaded = b.extract_val(valueElemIntTy, cmpxchg, 0);
+            newLoaded =
+                LLVM::BitcastOp::create(rewriter, loc, valueElemTy, newLoaded);
+          } else {
+            newLoaded = b.extract_val(valueElemTy, cmpxchg, 0);
+          }
+          Value atomPtr =
+              getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
+          b.store(newLoaded, atomPtr);
+        }
+
+        LLVM::BrOp::create(rewriter, loc, ValueRange(), endBlock);
+
+        // Build the last block: synced load from shared memory, exit.
+        rewriter.setInsertionPointToStart(endBlock);
+
+        if (op.getResult().use_empty()) {
+          rewriter.eraseOp(op);
+          return success();
+        }
+
+        b.barrier(triton::gpu::AddrSpace::Local);
+        Value atomPtr =
+            getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
+        Value ret = b.load(valueElemTy, atomPtr);
+        rewriter.replaceOp(op, {ret});
+        return success();
+      }
+    }
+
+    finalizeTensorAtomicResults(op, tensorTy, rewriter, resultVals, valueElemTy,
+                                b, threadPred, targetInfo, getTypeConverter());
+    return success();
+  }
+};
+
+// similar implementation to AtomicCasOpConversion
+struct AtomicRMWOpConversion
+    : public ConvertOpToLLVMPattern<triton::AtomicRMWOp>,
+      public LoadStoreConversionBase {
+  AtomicRMWOpConversion(LLVMTypeConverter &converter,
+                        const metal::TargetInfo &targetInfo,
+                        ModuleAxisInfoAnalysis &axisAnalysisPass,
+                        PatternBenefit benefit)
+      : ConvertOpToLLVMPattern(converter, benefit),
+        LoadStoreConversionBase(targetInfo, axisAnalysisPass) {}
+
+  LogicalResult
+  matchAndRewrite(triton::AtomicRMWOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto b = TritonLLVMOpBuilder(loc, rewriter);
+    MLIRContext *ctx = rewriter.getContext();
+
+    auto binOp = matchAtomicOp(op.getAtomicRmwOp());
+    if (!binOp)
+      return rewriter.notifyMatchFailure(op, "Unsupported RMW operation");
+
+    auto memOrder = getMemoryOrdering(op.getSem());
+    if (!memOrder)
+      return rewriter.notifyMatchFailure(op, "Unsupported RMW memory order");
+
+    auto scopeStr = getMetalGPUMemScopeStr(op.getScope());
+    if (!scopeStr)
+      return rewriter.notifyMatchFailure(op, "Unsupported RMW scope");
+
+    Value val = op.getVal();
+    Value opResult = op.getResult();
+
+    Value llPtr = adaptor.getPtr();
+    Value llVal = adaptor.getVal();
+    Value llMask = adaptor.getMask();
+
+    auto valElements = unpackLLElements(loc, llVal, rewriter);
+    auto ptrElements = unpackLLElements(loc, llPtr, rewriter);
+    SmallVector<Value> maskElements;
+    if (llMask)
+      maskElements = unpackLLElements(loc, llMask, rewriter);
+
+    auto tensorTy = dyn_cast<RankedTensorType>(opResult.getType());
+    Type valueElemTy =
+        tensorTy ? getTypeConverter()->convertType(tensorTy.getElementType())
+                 : opResult.getType();
+
+    auto elemsPerThread = getTotalElemsPerThread(val.getType());
+
+    auto freeVarMasks = getFreeVariableMasks(op.getPtr().getType());
+    Value threadPred = emitRedundantThreadPredicateNonNull(
+        freeVarMasks, rewriter, loc, targetInfo);
+    uint32_t regMask = freeVarMasks[str_attr("reg")];
+
+    auto scopeAttr = StringAttr::get(ctx, scopeStr.value());
+
+    SmallVector<Value> resultVals(elemsPerThread);
+    for (size_t i = 0; i < elemsPerThread; i += 1) {
+      if (tensorTy && (i & ~regMask) != i) {
+        resultVals[i] = resultVals[i & ~regMask];
+        continue;
+      }
+
+      Value rmwMask = llMask ? b.and_(threadPred, maskElements[i]) : threadPred;
+      Value rmwVal = valElements[i];
+      Value rmwPtr = ptrElements[i];
+
+      if (tensorTy) {
+        Value undefVal = b.undef(valueElemTy);
+        auto *curBlock = rewriter.getInsertionBlock();
+        auto *endBlock = curBlock->splitBlock(rewriter.getInsertionPoint());
+        auto *atomicBlock = rewriter.createBlock(
+            curBlock->getParent(), std::next(Region::iterator(curBlock)));
+        endBlock->addArgument({valueElemTy}, {loc});
+
+        rewriter.setInsertionPointToEnd(curBlock);
+        LLVM::CondBrOp::create(rewriter, loc, rmwMask, atomicBlock, endBlock,
+                               undefVal);
+
+        rewriter.setInsertionPointToEnd(atomicBlock);
+        Value retVal = LLVM::AtomicRMWOp::create(rewriter, loc, *binOp, rmwPtr,
+                                                 rmwVal, *memOrder, scopeAttr);
+
+        LLVM::BrOp::create(rewriter, loc, retVal, endBlock);
+        rewriter.setInsertionPointToStart(endBlock);
+        resultVals[i] = endBlock->getArgument(0);
+      } else {
+        auto *curBlock = rewriter.getInsertionBlock();
+        auto *endBlock = curBlock->splitBlock(rewriter.getInsertionPoint());
+        auto *atomicBlock = rewriter.createBlock(
+            curBlock->getParent(), std::next(Region::iterator(curBlock)));
+
+        rewriter.setInsertionPointToEnd(curBlock);
+        auto tid = getThreadId(rewriter, loc);
+        Value pred = b.icmp_eq(tid, b.i32_val(i));
+        LLVM::CondBrOp::create(rewriter, loc, pred, atomicBlock, endBlock);
+
+        rewriter.setInsertionPointToEnd(atomicBlock);
+        Value retVal = LLVM::AtomicRMWOp::create(rewriter, loc, *binOp, rmwPtr,
+                                                 rmwVal, *memOrder, scopeAttr);
+
+        if (!opResult.use_empty()) {
+          Value atomPtr =
+              getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
+          b.store(retVal, atomPtr);
+        }
+
+        LLVM::BrOp::create(rewriter, loc, ValueRange(), endBlock);
+
+        rewriter.setInsertionPointToStart(endBlock);
+
+        if (opResult.use_empty()) {
+          rewriter.eraseOp(op);
+          return success();
+        }
+
+        b.barrier(triton::gpu::AddrSpace::Local);
+        Value atomPtr =
+            getSharedMemoryBase(loc, rewriter, targetInfo, op.getOperation());
+        Value ret = b.load(valueElemTy, atomPtr);
+        rewriter.replaceOp(op, {ret});
+        return success();
+      }
+    }
+
+    finalizeTensorAtomicResults(op, tensorTy, rewriter, resultVals, valueElemTy,
+                                b, threadPred, targetInfo, getTypeConverter());
+    return success();
+  }
+};
+
 } // namespace
 
 namespace mlir::triton::metal {
@@ -267,7 +578,8 @@ void populateLoadStoreOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                        RewritePatternSet &patterns,
                                        ModuleAxisInfoAnalysis &axisInfoAnalysis,
                                        PatternBenefit benefit) {
-  patterns.add<LoadOpConversion, StoreOpConversion>(typeConverter, targetInfo,
-                                                    axisInfoAnalysis, benefit);
+  patterns.add<LoadOpConversion, StoreOpConversion, AtomicCASOpConversion,
+               AtomicRMWOpConversion>(typeConverter, targetInfo,
+                                      axisInfoAnalysis, benefit);
 }
 } // namespace mlir::triton::metal

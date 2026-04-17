@@ -178,6 +178,55 @@ def insert_bitcast_for_vecs(ir: str, getelementptr_type_dict: dict, struct_type_
     return ir
 
 
+def insert_bitcast_for_global_smem_load_store(ir: str) -> str:
+    # e.g. store i32 %1425, i32 addrspace(3)* @global_smem, align 4
+    # e.g. %1427 = load i32, i32 addrspace(3)* @global_smem, align 4
+    global_smem_match = re.search(r"@global_smem\s*=\s*\w+\s+addrspace\(\d+\)\s+global\s+(\[\d+\s+x\s+\w+\])", ir)
+    if not global_smem_match:
+        return ir
+
+    global_smem_type = global_smem_match.group(1)
+    cast_idx = 0
+    new_lines = []
+    for line in ir.split("\n"):
+        # store type %val, type addrspace(3)* @global_smem ...
+        store_match = re.match(
+            r"(?P<indent>\s*)store\s+(?P<type><\d+\s+x\s+\w+>|\w+)\s+(?P<val>[^,]+),\s+(?P<type2><[^>]+>|\w+)\s+addrspace\(3\)\*\s+@global_smem(?P<rest>.*)",
+            line,
+        )
+        if store_match:
+            elem_type = store_match.group("type")
+            cast_var = f"%smem_cast_{cast_idx}"
+            cast_idx += 1
+            new_lines.append(
+                f"{store_match.group('indent')}{cast_var} = bitcast {global_smem_type} addrspace(3)* @global_smem to {elem_type} addrspace(3)*"
+            )
+            new_lines.append(
+                f"{store_match.group('indent')}store {elem_type} {store_match.group('val').strip()}, {elem_type} addrspace(3)* {cast_var}{store_match.group('rest')}"
+            )
+            continue
+
+        # %res = load type, type addrspace(3)* @global_smem ...
+        load_match = re.match(
+            r"(?P<indent>\s*)(?P<result>%\w+)\s*=\s*load\s+(?P<type><\d+\s+x\s+\w+>|\w+),\s+(?P<type2><[^>]+>|\w+)\s+addrspace\(3\)\*\s+@global_smem(?P<rest>.*)",
+            line,
+        )
+        if load_match:
+            elem_type = load_match.group("type")
+            cast_var = f"%smem_cast_{cast_idx}"
+            cast_idx += 1
+            new_lines.append(
+                f"{load_match.group('indent')}{cast_var} = bitcast {global_smem_type} addrspace(3)* @global_smem to {elem_type} addrspace(3)*"
+            )
+            new_lines.append(
+                f"{load_match.group('indent')}{load_match.group('result')} = load {elem_type}, {elem_type} addrspace(3)* {cast_var}{load_match.group('rest')}"
+            )
+            continue
+
+        new_lines.append(line)
+    return "\n".join(new_lines)
+
+
 def get_func_args(s: str) -> list:
     """Get arg list, handling nested parentheses"""
     args, depth, cur = [], 0, []
@@ -346,6 +395,56 @@ def convert_opaque_ptrs_extractvalue(ir: str, struct_type_dict: dict) -> tuple[s
     return "\n".join(new_lines), struct_type_dict
 
 
+def convert_opaque_ptrs_cmpxchg(ir: str, getelementptr_type_dict: dict) -> str:
+    new_lines = []
+    for line in ir.split("\n"):
+        m = re.match(
+            r"(?P<indent>\s*)(?P<result>%\w+)\s*=\s*(?P<prefix>cmpxchg(?:\s+weak)?)\s+ptr\s+addrspace\((?P<addrspace>\d+)\)\s+(?P<ptr>%\w+),\s+(?P<val_type>\w+)\s+(?P<rest>.*)",
+            line,
+        )
+        if m:
+            ptr = m.group("ptr")
+            addrspace = m.group("addrspace")
+            if ptr in getelementptr_type_dict:
+                elem_type, _ = getelementptr_type_dict[ptr]
+            else:
+                elem_type = m.group("val_type")
+            typed_ptr = f"{elem_type} addrspace({addrspace})*"
+            new_lines.append(
+                f"{m.group('indent')}{m.group('result')} = {m.group('prefix')} "
+                f"{typed_ptr} {ptr}, {m.group('val_type')} {m.group('rest')}"
+            )
+        else:
+            new_lines.append(line)
+    return "\n".join(new_lines)
+
+
+def convert_opaque_ptrs_atomicrmw(ir: str, getelementptr_type_dict: dict) -> str:
+    new_lines = []
+    for line in ir.split("\n"):
+        # prev: %res = atomicrmw <op> ptr addrspace(N) %ptr, type %val ...
+        # new:  %res = atomicrmw <op> type addrspace(N)* %ptr, type %val ...
+        m = re.match(
+            r"(?P<indent>\s*)(?P<result>%\w+)\s*=\s*atomicrmw\s+(?P<op>\w+)\s+ptr\s+addrspace\((?P<addrspace>\d+)\)\s+(?P<ptr>%\w+),\s+(?P<val_type>\w+)\s+(?P<rest>.*)",
+            line,
+        )
+        if m:
+            ptr = m.group("ptr")
+            addrspace = m.group("addrspace")
+            if ptr in getelementptr_type_dict:
+                elem_type, _ = getelementptr_type_dict[ptr]
+            else:
+                elem_type = m.group("val_type")
+            typed_ptr = f"{elem_type} addrspace({addrspace})*"
+            new_lines.append(
+                f"{m.group('indent')}{m.group('result')} = atomicrmw {m.group('op')} "
+                f"{typed_ptr} {ptr}, {m.group('val_type')} {m.group('rest')}"
+            )
+        else:
+            new_lines.append(line)
+    return "\n".join(new_lines)
+
+
 def convert_opaque_ptrs_ptrtoint(ir: str, getelementptr_type_dict: dict) -> str:
     new_lines = []
     for line in ir.split("\n"):
@@ -459,6 +558,13 @@ def convert_opaque_ptrs_to_typed(ir: str) -> str:
     # this is special case since ptr type is only known after the inttoptr operation
     # usually getelementptr is called on result of inttoptr
     ir = convert_opaque_ptrs_inttoptr(ir)
+
+    # handle cmpxchg/atomicrmw with opaque ptrs
+    ir = convert_opaque_ptrs_cmpxchg(ir, getelementptr_type_dict)
+    ir = convert_opaque_ptrs_atomicrmw(ir, getelementptr_type_dict)
+
+    # cast global smem when storing/loading
+    ir = insert_bitcast_for_global_smem_load_store(ir)
 
     # need to do this after converting opaque ptrs for insertvalue/phi/extractvalue
     ir = insert_bitcast_for_vecs(ir, getelementptr_type_dict, struct_type_dict)
