@@ -115,7 +115,7 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
 }
 
 std::string TargetInfo::getMulhiFuncName(Type resultElementTy) const {
-  llvm_unreachable("not implemented");
+  return resultElementTy.isInteger(32) ? "air.mul_hi.u.i32" : "air.mul_hi.u.i64";
 }
 
 void TargetInfo::printf(RewriterBase &rewriter, Value formatStrStart,
