@@ -31,10 +31,12 @@ Driver implementation found [here](third_party/metal/backend/driver.py), with ca
 The driver loads the Metal kernel at runtime from Triton's on-disk cache and caches the kernel in memory. The driver extracts Metal buffers from Pytorch tensors and handles dispatch of the kernel using Pytorch's default Metal command queue.
 
 ## Progress
-- [x] 01-vector-add
-- [x] 02-fused-softmax
-- [x] 03-matrix-multiplication (works but performance not good)
-- [x] 04-low-memory-dropout
+- [x] `01-vector-add`
+- [x] `02-fused-softmax`
+- [x] `03-matrix-multiplication` (works but performance not good)
+- [x] `04-low-memory-dropout`
+- [x] `05-layer-norm` (compiles and runs but may have numerical precision issues)
+
 
 ### Notes:
 So far, the Metal backend is pretty bare and does not have any specific optimization passes, but compilation works for the first two Triton tutorials.
@@ -45,9 +47,11 @@ So far, the Metal backend is pretty bare and does not have any specific optimiza
 
 - `03-matrix-multiplication` works but performance is worse than PyTorch on `mps`, probably due to no SIMD optimization for dot product.
 
+- `05-layer-norm` compiles and runs, but there is one assertion that fails depending on the input. The error is just slightly larger than the threshold, so this may be due to some floating point precision issues.
+
 ## Currently Working On
 - [ ] `03-matrix-multiplication` performance improvement
-- [ ] `05-layer-norm`
+- [ ] `06-fused-attention` get compilation working
 
 ## Current Limitations
 - The Metal backend has currently only been tested on Macbook Pro with M1 Pro chip. Some parameters may be hardcoded, and this backend is not guaranteed to work for newer chips or other versions of MacOS/Metal.
