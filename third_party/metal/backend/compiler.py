@@ -25,7 +25,10 @@ class MetalOptions:
     # TODO add more metal-specific options as needed
     backend_name: str = "metal"
     num_warps: int = 4
+    num_stages: int = 1
     num_ctas: int = 1
+    default_dot_input_precision: str = "ieee"
+    allowed_dot_input_precisions: Tuple[str] = ("ieee",)
     warp_size: int = 32  # SIMD group size
     sanitize_overflow: bool = True  # TODO copied from AMD, modify if needed
     debug: bool = False
@@ -146,6 +149,10 @@ class MetalBackend(BaseBackend):
         }
         for orig, new_attr in llvm_attributes_replacements.items():
             ret = ret.replace(orig, new_attr)
+
+        # strip memory(...) attrs (e.g. memory(inaccessiblemem: write))
+        # that older LLVM can't parse
+        ret = re.sub(r"\bmemory\([^)]*:[^)]*\)", "", ret)
 
         # convert LLVM 17+ splat syntax to old vector constant format
         # xcrun metal uses old LLVM: use <type val> instead of splat(type val)

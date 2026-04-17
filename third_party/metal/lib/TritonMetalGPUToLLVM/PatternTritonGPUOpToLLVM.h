@@ -36,6 +36,11 @@ void populateBarrierOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                      RewritePatternSet &patterns,
                                      PatternBenefit benefit);
 
+void populateDotOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
+                                 RewritePatternSet &patterns,
+                                 ModuleAxisInfoAnalysis &axisInfoAnalysis,
+                                 PatternBenefit benefit);
+
 } // namespace mlir::triton::metal
 
 #endif // TRITON_THIRD_PARTY_METAL_LIB_TRITONMETALGPUTOLLVM_PATTERNTRITONGPUOPTOLLVM_H_

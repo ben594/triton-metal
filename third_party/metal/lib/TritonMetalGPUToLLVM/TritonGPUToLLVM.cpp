@@ -156,6 +156,8 @@ struct ConvertTritonMetalGPUToLLVM
 
     mlir::triton::populateConvertLayoutOpToLLVMPatterns(
         typeConverter, targetInfo, patterns, benefit);
+    metal::populateDotOpToLLVMPatterns(typeConverter, patterns,
+                                       axisInfoAnalysis, benefit);
     metal::populateElementwiseOpToLLVMPatterns(
         typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
     metal::populateLoadStoreOpToLLVMPatterns(
