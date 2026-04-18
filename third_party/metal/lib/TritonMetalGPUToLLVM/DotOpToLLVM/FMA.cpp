@@ -29,12 +29,30 @@ class MetalFMAVectorMultiplier : public FMAVectorMultiplier {
     auto dElemTy = dOpTy.getElementType();
     assert(aElemTy.isIntOrFloat() && !aElemTy.isIntOrIndex());
     DotIntrinsic chosenOp;
+
+    // try to use air intrinsic ops
+    {
+      if (aElemTy.isF16() && dElemTy.isF16()) {
+        chosenOp.vectorSize = 4;
+        chosenOp.outElemTy = f16_ty;
+        chosenOp.intrinsicName = "air.dot.v4f16";
+        return chosenOp;
+      }
+      if (aElemTy.isF32() && dElemTy.isF32()) {
+        chosenOp.vectorSize = 4;
+        chosenOp.outElemTy = f32_ty;
+        chosenOp.intrinsicName = "air.dot.v4f32";
+        return chosenOp;
+      }
+    }
+
     chosenOp.vectorSize = 1;
     chosenOp.additionalArgs = {};
-    // f16 inputs, f32 accumulator
+    // f16 inputs, f32 accumulator: cast via air.convert and then use air.dot.v4f32
     if (aElemTy.isF16() && dElemTy.isF32()) {
+      chosenOp.vectorSize = 4;
       chosenOp.outElemTy = f32_ty;
-      chosenOp.intrinsicName = "llvm.fmuladd.f32";
+      chosenOp.intrinsicName = "air.dot.v4f32";
       return chosenOp;
     }
     assert(aElemTy == dElemTy);
@@ -70,13 +88,38 @@ class MetalFMAVectorMultiplier : public FMAVectorMultiplier {
     return vec;
   }
 
+  // cast <4 x f16> vec to <4 x f32> using air.convert
+  Value upcastF16ToF32Vec(Value v) {
+    auto outTy = vec_ty(f32_ty, 4);
+    auto funcType = LLVM::LLVMFunctionType::get(outTy, {v.getType()});
+    Operation *parentOp = rewriter.getInsertionBlock()->getParentOp();
+    auto funcOp = appendOrGetExternFuncOp(
+        rewriter, parentOp, "air.convert.f.v4f32.f.v4f16", funcType);
+    return LLVM::createLLVMCallOp(rewriter, loc, funcOp, ValueRange{v})
+        .getResult();
+  }
+
   Value generateDotInstr(Value a, Value b, Value c) {
-    auto opBuilder = TritonLLVMOpBuilder(loc, rewriter);
-    // cast inputs if they don't match output type (e.g. f16 -> f32)
-    if (a.getType() != intrinsic.outElemTy)
-      a = opBuilder.fpext(intrinsic.outElemTy, a);
-    if (b.getType() != intrinsic.outElemTy)
-      b = opBuilder.fpext(intrinsic.outElemTy, b);
+    if (intrinsic.intrinsicName.starts_with("air.")) {
+      // air.dot has no accumulator arg, so accumulate with fadd
+      // if inputs are f16 but output is f32, cast inputs
+      if (a.getType() == vec_ty(f16_ty, 4) && intrinsic.outElemTy == f32_ty) {
+        a = upcastF16ToF32Vec(a);
+        b = upcastF16ToF32Vec(b);
+      }
+      auto aType = a.getType();
+      auto funcType =
+          LLVM::LLVMFunctionType::get(intrinsic.outElemTy, {aType, aType});
+      Operation *parentOp = rewriter.getInsertionBlock()->getParentOp();
+      auto funcOp = appendOrGetExternFuncOp(rewriter, parentOp,
+                                            intrinsic.intrinsicName, funcType);
+      auto opBuilder = TritonLLVMOpBuilder(loc, rewriter);
+      Value dot =
+          LLVM::createLLVMCallOp(rewriter, loc, funcOp, ValueRange{a, b})
+              .getResult();
+      return opBuilder.fadd(dot, c);
+    }
+
     SmallVector<Value> args{a, b, c};
     args.append(intrinsic.additionalArgs.begin(),
                 intrinsic.additionalArgs.end());
