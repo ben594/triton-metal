@@ -23,7 +23,6 @@ def ConvertTritonMetalGPUToLLVM : Pass<"convert-triton-metalgpu-to-llvm", "mlir:
 
 def AccelerateMetalMatmul : Pass<"accelerate-metal-matmul", "mlir::ModuleOp"> {
     let summary = "accelerate matmul";
-    let constructor = "mlir::triton::createAccelerateMetalMatmulPass()";
 
     let dependentDialects = ["mlir::triton::TritonDialect",
                              "mlir::triton::gpu::TritonGPUDialect"];

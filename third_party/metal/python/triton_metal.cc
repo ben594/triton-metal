@@ -16,6 +16,9 @@ void init_triton_metal_passes_ttgpuir(py::module &&m) {
   m.def("add_to_llvmir", [](mlir::PassManager &pm, const std::string &arch) {
     pm.addPass(mlir::triton::createConvertTritonMetalGPUToLLVMPass(arch));
   });
+  m.def("add_accelerate_matmul", [](mlir::PassManager &pm) {
+    pm.addPass(mlir::triton::createAccelerateMetalMatmul());
+  });
 }
 
 void addAirKernelMetadata(llvm::Module *mod) {

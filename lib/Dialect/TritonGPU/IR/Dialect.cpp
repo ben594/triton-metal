@@ -2519,6 +2519,83 @@ SwizzledSharedEncodingAttr AMDMfmaEncodingAttr::composeSharedLayoutForOperand(
 }
 
 //===----------------------------------------------------------------------===//
+// MetalMfma encoding
+//===----------------------------------------------------------------------===//
+
+SmallVector<unsigned> MetalMfmaEncodingAttr::getRepOrder() const {
+  return getMatrixOrder(getRank(), /*rowMajor*/ true);
+}
+
+SmallVector<unsigned>
+MetalMfmaEncodingAttr::getRepOrderForOperand(int opIdx) const {
+  return getOrderForDotOperand(opIdx, getRank(), /*kContig*/ true);
+}
+
+LogicalResult MetalMfmaEncodingAttr::verify(
+    llvm::function_ref<mlir::InFlightDiagnostic()> emitError,
+    ArrayRef<unsigned> warpsPerCTA, ArrayRef<unsigned> instrShape,
+    CGAEncodingAttr CGALayout) {
+  if (instrShape.size() != 3 || instrShape[0] != 8 || instrShape[1] != 8 ||
+      instrShape[2] != 8) {
+    return emitError()
+           << "MetalMfmaEncodingAttr instrShape must be {8, 8, 8}, got {"
+           << instrShape[0] << ", " << instrShape[1] << ", " << instrShape[2]
+           << "}";
+  }
+  if (warpsPerCTA.size() != 2) {
+    return emitError() << "MetalMfmaEncodingAttr warpsPerCTA must be rank-2";
+  }
+  return success();
+}
+
+Attribute MetalMfmaEncodingAttr::parse(AsmParser &parser, Type type) {
+  if (parser.parseLess())
+    return {};
+  DictionaryAttr dict;
+  if (parser.parseAttribute(dict))
+    return {};
+  if (parser.parseGreater())
+    return {};
+
+  SmallVector<unsigned> warpsPerCTA, instrShape;
+  CGAEncodingAttr cgaLayout;
+
+  for (const NamedAttribute &attr : dict) {
+    if (attr.getName() == "warpsPerCTA") {
+      if (auto arr = mlir::dyn_cast<ArrayAttr>(attr.getValue())) {
+        for (auto v : arr)
+          warpsPerCTA.push_back(
+              mlir::cast<IntegerAttr>(v).getValue().getZExtValue());
+      }
+    } else if (attr.getName() == "instrShape") {
+      if (auto arr = mlir::dyn_cast<ArrayAttr>(attr.getValue())) {
+        for (auto v : arr)
+          instrShape.push_back(
+              mlir::cast<IntegerAttr>(v).getValue().getZExtValue());
+      }
+    } else if (attr.getName() == "CGALayout") {
+      cgaLayout = mlir::dyn_cast<CGAEncodingAttr>(attr.getValue());
+    }
+  }
+
+  if (instrShape.empty())
+    instrShape = {8, 8, 8};
+
+  return parser.getChecked<MetalMfmaEncodingAttr>(
+      parser.getContext(), warpsPerCTA, instrShape, cgaLayout);
+}
+
+void MetalMfmaEncodingAttr::print(AsmPrinter &printer) const {
+  printer << "<{warpsPerCTA = [";
+  llvm::interleaveComma(getWarpsPerCTA(), printer);
+  printer << "], instrShape = [";
+  llvm::interleaveComma(getInstrShape(), printer);
+  printer << "], CGALayout = ";
+  printer.printAttribute(getCGALayout());
+  printer << "}>";
+}
+
+//===----------------------------------------------------------------------===//
 // Wmma encoding
 //===----------------------------------------------------------------------===//
 
@@ -2714,6 +2791,13 @@ LogicalResult DotOperandEncodingAttr::verify(
     if (kWidth == 0)
       return emitError() << "ttg.dot_op kWidth parameter is mandatory for "
                             "MFMA parent";
+    return success();
+  }
+
+  if (auto parentAttr = mlir::dyn_cast<MetalMfmaEncodingAttr>(parent)) {
+    if (kWidth == 0)
+      return emitError() << "ttg.dot_op kWidth parameter is mandatory for "
+                            "Metal MFMA parent";
     return success();
   }
 
