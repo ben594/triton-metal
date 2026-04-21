@@ -1,4 +1,5 @@
 #include "TritonMetalGPUTransforms/Passes.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
@@ -15,22 +16,53 @@ namespace {
 Value findBasePtr(PatternRewriter &rewriter, Value val, tt::DotOp dotOp) {
   auto convertLayoutOp = val.getDefiningOp<ttg::ConvertLayoutOp>();
   if (!convertLayoutOp) {
+    llvm::errs() << "failed to find convert layout op\n";
     return {};
   }
 
   auto ttLoadOp = convertLayoutOp.getSrc().getDefiningOp<tt::LoadOp>();
   if (!ttLoadOp) {
+    llvm::errs() << "failed to find load op\n";
     return {};
   }
 
-  auto ptr = ttLoadOp.getPtr();
+  auto ttLoadOpPtr = ttLoadOp.getPtr();
+  Value forOpArg{};
 
-  while (auto addPtrOp = ptr.getDefiningOp<tt::AddPtrOp>()) {
-    ptr = addPtrOp.getPtr();
+  // need to look at init args of for op
+  if (auto blockArg = dyn_cast<BlockArgument>(ttLoadOpPtr)) {
+    auto parentOp = blockArg.getOwner()->getParentOp();
+    if (auto forOp = dyn_cast<mlir::scf::ForOp>(parentOp)) {
+      auto initArgs = forOp.getInitArgs();
+      auto argIndex = blockArg.getArgNumber() - forOp.getNumInductionVars();
+      if (argIndex < 0 || argIndex >= initArgs.size()) {
+        return {};
+      }
+
+      forOpArg = initArgs[argIndex];
+    } else {
+      llvm::errs() << "failed to find parent for block argument\n";
+      return {};
+    }
+  } else {
+    llvm::errs() << "failed to find block argument\n";
+    return {};
   }
 
-  auto ttSplatOp = ptr.getDefiningOp<tt::SplatOp>();
+  if (!forOpArg) {
+    llvm::errs() << "failed to find for op argument\n";
+    return {};
+  }
+
+  // at this point, defining op of forOpArg should be addptr op
+  auto addPtrResult = forOpArg;
+  while (auto addPtrOp = addPtrResult.getDefiningOp<tt::AddPtrOp>()) {
+    addPtrResult = addPtrOp.getPtr();
+  }
+
+  auto ttSplatOp = addPtrResult.getDefiningOp<tt::SplatOp>();
   if (!ttSplatOp) {
+    llvm::errs() << "failed to find splat op\n";
     return {};
   }
 
@@ -56,12 +88,10 @@ public:
     Value aBasePtr = findBasePtr(rewriter, dotOp.getA(), dotOp);
     Value bBasePtr = findBasePtr(rewriter, dotOp.getB(), dotOp);
     if (!aBasePtr || !bBasePtr) {
+      llvm::errs() << "failed to find base ptrs\n";
       return rewriter.notifyMatchFailure(
           dotOp, "failed to find base ptrs for A and B");
     }
-
-    llvm::errs() << "a base ptr: " << aBasePtr << "\n";
-    llvm::errs() << "b base ptr: " << bBasePtr << "\n";
 
     // TODO need to look forward to find the store op that uses dot op
     // accumulated result
