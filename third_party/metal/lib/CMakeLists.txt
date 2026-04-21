@@ -1,3 +1,4 @@
 add_subdirectory(Analysis)
 add_subdirectory(Dialect)
 add_subdirectory(TritonMetalGPUToLLVM)
+add_subdirectory(TritonMetalGPUTransforms)

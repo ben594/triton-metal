@@ -1,6 +1,8 @@
 #pragma once
 #include "amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "amd/include/TritonAMDGPUTransforms/Passes.h"
+#include "metal/include/Dialect/TritonMetalGPU/IR/Dialect.h"
+#include "metal/include/TritonMetalGPUTransforms/Passes.h"
 #include "nvidia/include/Dialect/NVGPU/IR/Dialect.h"
 #include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
 #include "proton/Dialect/include/Conversion/ProtonGPUToLLVM/Passes.h"
@@ -22,6 +24,7 @@
 #include "TritonAMDGPUTransforms/TritonGPUConversion.h"
 
 #include "TritonMetalGPUToLLVM/Passes.h"
+#include "TritonMetalGPUTransforms/Passes.h"
 
 #include "triton/Dialect/Triton/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
@@ -108,7 +111,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   
   // TritonMetalGPUToLLVM passes
   mlir::triton::registerConvertTritonMetalGPUToLLVM();
-  mlir::triton::registerAccelerateMetalMatmul();
+  mlir::registerTritonMetalGPUAccelerateMatmul();
 
   mlir::ub::registerConvertUBToLLVMInterface(registry);
   mlir::registerConvertNVVMToLLVMInterface(registry);

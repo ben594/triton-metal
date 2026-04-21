@@ -17,7 +17,7 @@ void init_triton_metal_passes_ttgpuir(py::module &&m) {
     pm.addPass(mlir::triton::createConvertTritonMetalGPUToLLVMPass(arch));
   });
   m.def("add_accelerate_matmul", [](mlir::PassManager &pm) {
-    pm.addPass(mlir::triton::createAccelerateMetalMatmul());
+    pm.addPass(mlir::createTritonMetalGPUAccelerateMatmul());
   });
 }
 
