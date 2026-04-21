@@ -12,8 +12,6 @@ def TritonMetalGPU_Dialect : Dialect {
   }];
 
   let dependentDialects = ["triton::TritonDialect"];
-
-  let useDefaultAttributePrinterParser = 1;
 }
 
 #endif
