@@ -111,7 +111,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   
   // TritonMetalGPUToLLVM passes
   mlir::triton::registerConvertTritonMetalGPUToLLVM();
-  mlir::registerTritonMetalGPUAccelerateMatmul();
+  // mlir::registerTritonMetalGPUAccelerateMatmul();
 
   mlir::ub::registerConvertUBToLLVMInterface(registry);
   mlir::registerConvertNVVMToLLVMInterface(registry);
