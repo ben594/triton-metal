@@ -1,9 +1,9 @@
 #include "TritonMetalGPUTransforms/Passes.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
-#include "triton/Tools/LayoutUtils.h"
 #include "triton/Tools/LinearLayout.h"
 
 namespace tt = mlir::triton;
@@ -66,8 +66,12 @@ struct TritonMetalGPUAllocateSmemForSimdgroupMatmulPass
                                      /*mutableMemory=*/true);
       };
 
-      // insert local alloc ops before dot op
-      builder.setInsertionPoint(dotOp);
+      // host smem allocation outside enclosing loops
+      Operation *insertBefore = dotOp;
+      while (auto forOp = insertBefore->getParentOfType<scf::ForOp>())
+        insertBefore = forOp;
+      builder.setInsertionPoint(insertBefore);
+
       ttg::LocalAllocOp::create(
           builder, loc,
           makeSharedTy(aTensorTy.getShape(), aTensorTy.getElementType()));
