@@ -10,4 +10,10 @@ include "mlir/Pass/PassBase.td"
 //                            "mlir::triton::gpu::TritonGPUDialect"];
 // }
 
+def TritonMetalGPUAllocateSmemForSimdgroupMatmul : Pass<"allocate-smem-for-simdgroup-matmul", "mlir::ModuleOp"> {
+  let summary = "allocate shared memory for simdgroup matmul";
+  let dependentDialects = ["mlir::triton::TritonDialect",
+                           "mlir::triton::gpu::TritonGPUDialect"];
+}
+
 #endif // TRITONGPU_PASSES
