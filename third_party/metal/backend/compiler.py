@@ -87,7 +87,7 @@ class MetalBackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
 
-        metal.passes.ttgpuir.add_accelerate_matmul(pm)
+        # metal.passes.ttgpuir.add_accelerate_matmul(pm)
         pm.run(mod, "make_ttgir")
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
         return mod

@@ -36,10 +36,11 @@ void populateBarrierOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                      RewritePatternSet &patterns,
                                      PatternBenefit benefit);
 
-void populateDotOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
-                                 RewritePatternSet &patterns,
-                                 ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                                 PatternBenefit benefit);
+void populateDotOpToLLVMPatterns(
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    ModuleAxisInfoAnalysis &axisInfoAnalysis,
+    const DenseMap<int, std::array<Operation *, 3>> &dotAllocOps,
+    const TargetInfo &targetInfo, PatternBenefit benefit);
 
 } // namespace mlir::triton::metal
 

@@ -11,7 +11,7 @@ add_triton_library(TritonMetalGPUToLLVM
     SPMDOpToLLVM.cpp
     DotOpToLLVM.cpp
     DotOpToLLVM/FMA.cpp
-    DotOpToLLVM/MFMA.cpp
+    DotOpToLLVM/SimdgroupMatmul.cpp
 
     DEPENDS
     TritonMetalGPUConversionPassIncGen

@@ -27,6 +27,7 @@ namespace mlir::triton {
 } // namespace mlir::triton
 
 using namespace mlir;
+namespace ttg = mlir::triton::gpu;
 
 namespace {
 class TritonLLVMFunctionConversionTarget : public ConversionTarget {
@@ -87,6 +88,22 @@ struct UnrealizedCastToLoadPattern
   }
 };
 
+DenseMap<int, std::array<Operation *, 3>> getDotAllocOps(ModuleOp &mod) {
+  DenseMap<int, std::array<Operation *, 3>>
+      dotAllocOps; // dot_idx -> {allocA, allocB, allocC}
+  mod.walk([&](ttg::LocalAllocOp allocOp) {
+    auto roleAttr = allocOp->getAttrOfType<StringAttr>("metal.dot_smem");
+    auto idAttr = allocOp->getAttrOfType<IntegerAttr>("metal.dot_idx");
+    if (!roleAttr || !idAttr)
+      return;
+    int id = idAttr.getInt();
+    StringRef role = roleAttr.getValue();
+    int idx = role == "A" ? 0 : role == "B" ? 1 : 2;
+    dotAllocOps[id][idx] = allocOp.getOperation();
+  });
+  return dotAllocOps;
+}
+
 struct ConvertTritonMetalGPUToLLVM
     : public triton::impl::ConvertTritonMetalGPUToLLVMBase<
           ConvertTritonMetalGPUToLLVM> {
@@ -102,6 +119,9 @@ struct ConvertTritonMetalGPUToLLVM
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
+
+    // do this before any pattern matching
+    auto dotAllocOps = getDotAllocOps(mod);
 
     metal::TargetInfo targetInfo(this->arch.getValue());
 
@@ -157,7 +177,8 @@ struct ConvertTritonMetalGPUToLLVM
     mlir::triton::populateConvertLayoutOpToLLVMPatterns(
         typeConverter, targetInfo, patterns, benefit);
     metal::populateDotOpToLLVMPatterns(typeConverter, patterns,
-                                       axisInfoAnalysis, benefit);
+                                       axisInfoAnalysis, dotAllocOps,
+                                       targetInfo, benefit);
     metal::populateElementwiseOpToLLVMPatterns(
         typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
     metal::populateLoadStoreOpToLLVMPatterns(

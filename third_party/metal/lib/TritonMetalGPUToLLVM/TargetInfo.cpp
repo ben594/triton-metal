@@ -91,7 +91,8 @@ Value TargetInfo::programId(RewriterBase &rewriter, Location loc,
                   ->getParentOfType<LLVM::LLVMFuncOp>();
   unsigned numArgs = func.getNumArguments();
   if (axis == ProgramIDDim::X) {
-    return func.getArgument(numArgs - mlir::triton::metal::kThreadgroupIdxFromEnd);
+    return func.getArgument(numArgs -
+                            mlir::triton::metal::kThreadgroupIdxFromEnd);
   }
   llvm_unreachable("Only X axis supported for now");
 }
@@ -115,7 +116,8 @@ bool TargetInfo::warpReduce(RewriterBase &rewriter, Location loc,
 }
 
 std::string TargetInfo::getMulhiFuncName(Type resultElementTy) const {
-  return resultElementTy.isInteger(32) ? "air.mul_hi.u.i32" : "air.mul_hi.u.i64";
+  return resultElementTy.isInteger(32) ? "air.mul_hi.u.i32"
+                                       : "air.mul_hi.u.i64";
 }
 
 void TargetInfo::printf(RewriterBase &rewriter, Value formatStrStart,
@@ -138,7 +140,13 @@ void TargetInfo::assertFail(RewriterBase &rewriter, Location loc,
 int TargetInfo::getSharedAddressSpace() const { return 3; }
 
 int TargetInfo::getAddressSpace(Attribute addressSpace) const {
-  llvm_unreachable("not implemented");
+  int spaceId = 1;
+  if (isa<triton::gpu::SharedMemorySpaceAttr>(addressSpace)) {
+    spaceId = 3;
+  } else {
+    llvm::report_fatal_error("Only support SharedMemorySpace for now");
+  }
+  return spaceId;
 }
 
 bool TargetInfo::supportVectorizedAtomics() const {
