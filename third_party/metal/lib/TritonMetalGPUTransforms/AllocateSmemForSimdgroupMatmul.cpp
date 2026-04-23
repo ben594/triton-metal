@@ -1,6 +1,7 @@
 #include "TritonMetalGPUTransforms/Passes.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Attributes.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include "triton/Dialect/TritonGPU/IR/Dialect.h"
@@ -24,6 +25,8 @@ struct TritonMetalGPUAllocateSmemForSimdgroupMatmulPass
   void runOnOperation() override {
     ModuleOp mod = getOperation();
     OpBuilder builder(mod.getContext());
+
+    int64_t dotIdx = 0; // support multiple dot ops per function
 
     mod.walk([&](tt::DotOp dotOp) {
       auto *ctx = dotOp.getContext();
@@ -72,15 +75,39 @@ struct TritonMetalGPUAllocateSmemForSimdgroupMatmulPass
         insertBefore = forOp;
       builder.setInsertionPoint(insertBefore);
 
-      ttg::LocalAllocOp::create(
+      auto aAlloc = ttg::LocalAllocOp::create(
           builder, loc,
           makeSharedTy(aTensorTy.getShape(), aTensorTy.getElementType()));
-      ttg::LocalAllocOp::create(
+      aAlloc->setAttr("metal.dot_smem", StringAttr::get(ctx, "A"));
+      aAlloc->setAttr(
+          "metal.dot_idx",
+          IntegerAttr::get(mlir::IntegerType::get(ctx, 32), dotIdx));
+      auto bAlloc = ttg::LocalAllocOp::create(
           builder, loc,
           makeSharedTy(bTensorTy.getShape(), bTensorTy.getElementType()));
-      ttg::LocalAllocOp::create(
+      bAlloc->setAttr("metal.dot_smem", StringAttr::get(ctx, "B"));
+      bAlloc->setAttr(
+          "metal.dot_idx",
+          IntegerAttr::get(mlir::IntegerType::get(ctx, 32), dotIdx));
+      auto cAlloc = ttg::LocalAllocOp::create(
           builder, loc,
           makeSharedTy(retType.getShape(), retType.getElementType()));
+      cAlloc->setAttr("metal.dot_smem", StringAttr::get(ctx, "C"));
+      cAlloc->setAttr(
+          "metal.dot_idx",
+          IntegerAttr::get(mlir::IntegerType::get(ctx, 32), dotIdx));
+
+      dotOp->setAttr("metal.dot_idx",
+                     IntegerAttr::get(mlir::IntegerType::get(ctx, 32), dotIdx));
+
+      // add LocalDeallocOp after outer loop so liveness analysis sees A/B/C as
+      // live in the loop body and gives valid offsets
+      builder.setInsertionPointAfter(insertBefore);
+      ttg::LocalDeallocOp::create(builder, loc, aAlloc->getResult(0));
+      ttg::LocalDeallocOp::create(builder, loc, bAlloc->getResult(0));
+      ttg::LocalDeallocOp::create(builder, loc, cAlloc->getResult(0));
+
+      dotIdx++;
     });
   }
 };
