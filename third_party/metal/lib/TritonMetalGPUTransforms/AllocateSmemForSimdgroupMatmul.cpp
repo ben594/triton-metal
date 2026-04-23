@@ -69,11 +69,10 @@ struct TritonMetalGPUAllocateSmemForSimdgroupMatmulPass
                                      /*mutableMemory=*/true);
       };
 
-      // host smem allocation outside enclosing loops
-      Operation *insertBefore = dotOp;
-      while (auto forOp = insertBefore->getParentOfType<scf::ForOp>())
-        insertBefore = forOp;
-      builder.setInsertionPoint(insertBefore);
+      // allocate smem right before dot op
+      // previously hoisted this outside of the loop, but that overlapped with
+      // convert layout scratch space and may take up too much smem
+      builder.setInsertionPoint(dotOp);
 
       auto aAlloc = ttg::LocalAllocOp::create(
           builder, loc,
@@ -89,23 +88,14 @@ struct TritonMetalGPUAllocateSmemForSimdgroupMatmulPass
       bAlloc->setAttr(
           "metal.dot_idx",
           IntegerAttr::get(mlir::IntegerType::get(ctx, 32), dotIdx));
-      auto cAlloc = ttg::LocalAllocOp::create(
-          builder, loc,
-          makeSharedTy(retType.getShape(), retType.getElementType()));
-      cAlloc->setAttr("metal.dot_smem", StringAttr::get(ctx, "C"));
-      cAlloc->setAttr(
-          "metal.dot_idx",
-          IntegerAttr::get(mlir::IntegerType::get(ctx, 32), dotIdx));
 
       dotOp->setAttr("metal.dot_idx",
                      IntegerAttr::get(mlir::IntegerType::get(ctx, 32), dotIdx));
 
-      // add LocalDeallocOp after outer loop so liveness analysis sees A/B/C as
-      // live in the loop body and gives valid offsets
-      builder.setInsertionPointAfter(insertBefore);
+      // dealloc right after the dot op to bound liveness tightly
+      builder.setInsertionPointAfter(dotOp);
       ttg::LocalDeallocOp::create(builder, loc, aAlloc->getResult(0));
       ttg::LocalDeallocOp::create(builder, loc, bAlloc->getResult(0));
-      ttg::LocalDeallocOp::create(builder, loc, cAlloc->getResult(0));
 
       dotIdx++;
     });
