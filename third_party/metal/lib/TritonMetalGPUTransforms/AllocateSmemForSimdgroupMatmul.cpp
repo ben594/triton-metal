@@ -92,6 +92,13 @@ struct TritonMetalGPUAllocateSmemForSimdgroupMatmulPass
       dotOp->setAttr("metal.dot_idx",
                      IntegerAttr::get(mlir::IntegerType::get(ctx, 32), dotIdx));
 
+      // store A and B in smem before the dot op
+      // when lowering the dot op, can load from smem
+      auto aSmemStore = ttg::LocalStoreOp::create(builder, loc, dotOp.getA(),
+                                                  aAlloc.getResult());
+      auto bSmemStore = ttg::LocalStoreOp::create(builder, loc, dotOp.getB(),
+                                                  bAlloc.getResult());
+
       // dealloc right after the dot op to bound liveness tightly
       builder.setInsertionPointAfter(dotOp);
       ttg::LocalDeallocOp::create(builder, loc, aAlloc->getResult(0));
