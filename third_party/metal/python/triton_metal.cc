@@ -1,5 +1,6 @@
 #include "TritonMetalGPUToLLVM/MetalKernelArgs.h"
 #include "TritonMetalGPUToLLVM/Passes.h"
+#include "TritonMetalGPUTransforms/Passes.h"
 #include "mlir/Pass/PassManager.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Module.h"
@@ -19,6 +20,9 @@ void init_triton_metal_passes_ttgpuir(py::module &&m) {
   // m.def("add_accelerate_matmul", [](mlir::PassManager &pm) {
   //   pm.addPass(mlir::createTritonMetalGPUAccelerateMatmul());
   // });
+  m.def("add_allocate_smem_for_simdgroup_matmul", [](mlir::PassManager &pm) {
+    pm.addPass(mlir::createTritonMetalGPUAllocateSmemForSimdgroupMatmul());
+  });
 }
 
 void addAirKernelMetadata(llvm::Module *mod) {
