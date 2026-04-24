@@ -89,6 +89,25 @@ struct TritonMetalGPUAllocateSmemForSimdgroupMatmulPass
           "metal.dot_idx",
           IntegerAttr::get(mlir::IntegerType::get(ctx, 32), dotIdx));
 
+      // don't allocate entire output tile, just enough for one iteration of CTA
+      // tile
+      auto cShape = retType.getShape();
+      auto cElemTy = retType.getElementType();
+      auto cEnc = cast<ttg::BlockedEncodingAttr>(retType.getEncoding());
+      auto cSizePerThread = cEnc.getSizePerThread();
+      auto cThreadsPerWarp = cEnc.getThreadsPerWarp();
+      auto cWarpsPerCTA = cEnc.getWarpsPerCTA();
+      std::vector<int64_t> cSmemShape = {
+          cSizePerThread[0] * cThreadsPerWarp[0] * cWarpsPerCTA[0],
+          cSizePerThread[1] * cThreadsPerWarp[1] * cWarpsPerCTA[1],
+      };
+      auto cAlloc = ttg::LocalAllocOp::create(
+          builder, loc, makeSharedTy(cSmemShape, cElemTy));
+      cAlloc->setAttr("metal.dot_smem", StringAttr::get(ctx, "C"));
+      cAlloc->setAttr(
+          "metal.dot_idx",
+          IntegerAttr::get(mlir::IntegerType::get(ctx, 32), dotIdx));
+
       dotOp->setAttr("metal.dot_idx",
                      IntegerAttr::get(mlir::IntegerType::get(ctx, 32), dotIdx));
 
@@ -103,6 +122,7 @@ struct TritonMetalGPUAllocateSmemForSimdgroupMatmulPass
       builder.setInsertionPointAfter(dotOp);
       ttg::LocalDeallocOp::create(builder, loc, aAlloc->getResult(0));
       ttg::LocalDeallocOp::create(builder, loc, bAlloc->getResult(0));
+      ttg::LocalDeallocOp::create(builder, loc, cAlloc->getResult(0));
 
       dotIdx++;
     });
