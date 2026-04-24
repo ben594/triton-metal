@@ -92,8 +92,7 @@ def insert_bitcast_for_vecs(ir: str, getelementptr_type_dict: dict, struct_type_
             addrspace = gep_match_global_smem.group(4)
             base_ptr = gep_match_global_smem.group(5)
             remaining = gep_match_global_smem.group(6)
-            if int(addrspace) == 3:
-                assert base_ptr == "@global_smem"
+            if int(addrspace) == 3 and base_ptr == "@global_smem":
                 cast_result = f"%vec_cast_{cast_idx}"
                 cast_idx += 1
                 new_lines.append(
@@ -237,6 +236,170 @@ def insert_bitcast_for_global_smem_load_store(ir: str) -> str:
             continue
 
         new_lines.append(line)
+    return "\n".join(new_lines)
+
+
+def insert_bitcast_for_global_smem_gep(ir: str) -> str:
+    """
+    Before:
+        %r = getelementptr inbounds i8, i8 addrspace(3)* getelementptr inbounds (i8, i8 addrspace(3)* @global_smem, i64 16384), i32 %idx
+    After:
+        %smem_gep_cast_N = bitcast [K x i8] addrspace(3)* @global_smem to i8 addrspace(3)*
+        %smem_gep_base_N = getelementptr inbounds i8, i8 addrspace(3)* %smem_gep_cast_N, i64 16384
+        %r               = getelementptr inbounds i8, i8 addrspace(3)* %smem_gep_base_N, i32 %idx
+    """
+    global_smem_match = re.search(r"@global_smem\s*=\s*\w+\s+addrspace\(\d+\)\s+global\s+(\[\d+\s+x\s+\w+\])", ir)
+    if not global_smem_match:
+        return ir
+    global_smem_type = global_smem_match.group(1)
+
+    cast_idx = 0
+    new_lines = []
+    for line in ir.split("\n"):
+        # inbounds is optional on outer GEP instr
+        # inner_elem may differ from outer elem_type (e.g. i8 inner, float outer)
+        m = re.match(
+            r"(?P<indent>\s*)(?P<result>%\w+)\s*=\s*getelementptr(?P<inbounds>\s+inbounds)? (?P<elem_type>\w+),\s*"
+            r"(?P<ptr_type>\w+)\s+addrspace\((?P<addrspace>\d+)\)\*\s+"
+            r"getelementptr(?:\s+inbounds)?\s+\((?P<inner_elem>\w+),\s+\w+\s+addrspace\(\d+\)\*\s+@global_smem,\s+i64\s+(?P<offset>\d+)\)"
+            r"(?P<remaining>.*)",
+            line,
+        )
+        if m:
+            indent = m.group("indent")
+            result = m.group("result")
+            inbounds = m.group("inbounds") or ""
+            elem_type = m.group("elem_type")
+            addrspace = m.group("addrspace")
+            inner_elem = m.group("inner_elem")
+            offset = m.group("offset")
+            remaining = m.group("remaining")
+
+            cast_var = f"%smem_gep_cast_{cast_idx}"
+            base_var = f"%smem_gep_base_{cast_idx}"
+            cast_idx += 1
+
+            # bitcast global array to inner element ptr (always i8 for byte GEPs)
+            new_lines.append(
+                f"{indent}{cast_var} = bitcast {global_smem_type} addrspace({addrspace})* @global_smem to {inner_elem} addrspace({addrspace})*"
+            )
+            new_lines.append(
+                f"{indent}{base_var} = getelementptr inbounds {inner_elem}, {inner_elem} addrspace({addrspace})* {cast_var}, i64 {offset}"
+            )
+
+            # if outer GEP uses different elem type, add bitcast
+            outer_base_var = base_var
+            if inner_elem != elem_type:
+                typed_var = f"%smem_gep_typed_{cast_idx - 1}"
+                new_lines.append(
+                    f"{indent}{typed_var} = bitcast {inner_elem} addrspace({addrspace})* {base_var} to {elem_type} addrspace({addrspace})*"
+                )
+                outer_base_var = typed_var
+
+            new_lines.append(
+                f"{indent}{result} = getelementptr{inbounds} {elem_type}, {elem_type} addrspace({addrspace})* {outer_base_var}{remaining}"
+            )
+            continue
+
+        new_lines.append(line)
+
+    return "\n".join(new_lines)
+
+
+def insert_bitcast_for_global_smem_call(ir: str) -> str:
+    """Materialize constexpr GEP off @global_smem in call instr
+
+    Constexpr GEP can't reference SSA values, so need to expand calls that passes SSA val as arg
+
+    Before:
+        %r = call <64 x half> @air.simdgroup_matrix_8x8_load.v64f16.p3f16(ptr addrspace(3) getelementptr inbounds (i8, i8 addrspace(3)* @global_smem, i64 16384), ...)
+    After:
+        %smem_call_gep_cast_N  = bitcast [K x i8] addrspace(3)* @global_smem to i8 addrspace(3)*
+        %smem_call_gep_base_N  = getelementptr inbounds i8, i8 addrspace(3)* %smem_call_gep_cast_N, i64 16384
+        %smem_call_gep_typed_N = bitcast i8 addrspace(3)* %smem_call_gep_base_N to half addrspace(3)*
+        %r = call <64 x half> @air.simdgroup_matrix_8x8_load.v64f16.p3f16(half addrspace(3)* %smem_call_gep_typed_N, ...)
+    """
+    global_smem_match = re.search(r"@global_smem\s*=\s*\w+\s+addrspace\(\d+\)\s+global\s+(\[\d+\s+x\s+\w+\])", ir)
+    if not global_smem_match:
+        return ir
+    global_smem_type = global_smem_match.group(1)
+
+    constexpr_gep = re.compile(
+        r"(ptr\s+addrspace\((\d+)\))\s+getelementptr inbounds\s+\((\w+),\s+\w+\s+addrspace\(\d+\)\*\s+@global_smem,\s+i64\s+(\d+)\)"
+    )
+    simdgroup_func = re.compile(r"@(air\.simdgroup_matrix_8x8_(?:load|store)\.[^(]+)\(")
+
+    # also matches simdgroup calls that pass @global_smem directly (no GEP offset)
+    direct_global_smem = re.compile(r"ptr\s+addrspace\((\d+)\)\s+@global_smem")
+
+    cast_idx = 0
+    new_lines = []
+    for line in ir.split("\n"):
+        if "call " not in line or "@global_smem" not in line:
+            new_lines.append(line)
+            continue
+
+        indent = re.match(r"(\s*)", line).group(1)
+        sg_m = simdgroup_func.search(line)
+
+        # get typed ptr from simdgroup function name suffix
+        def simdgroup_typed_ptr(func_name):
+            ptr_suffix_m = re.search(r"\.p(\d+)(\w+)$", func_name)
+            if ptr_suffix_m:
+                llvm_type = _AIR_ELEM_TYPE_MAP.get(ptr_suffix_m.group(2))
+                if llvm_type:
+                    return f"{llvm_type} addrspace({ptr_suffix_m.group(1)})*"
+            return None
+
+        # case 1: constexpr GEP off @global_smem as call arg
+        if "getelementptr inbounds" in line:
+            m = constexpr_gep.search(line)
+            if m:
+                addrspace = m.group(2)
+                elem_type = m.group(3)  # "i8"
+                offset = m.group(4)
+
+                cast_var = f"%smem_call_gep_cast_{cast_idx}"
+                base_var = f"%smem_call_gep_base_{cast_idx}"
+                cast_idx += 1
+
+                new_lines.append(
+                    f"{indent}{cast_var} = bitcast {global_smem_type} addrspace({addrspace})* @global_smem to {elem_type} addrspace({addrspace})*"
+                )
+                new_lines.append(
+                    f"{indent}{base_var} = getelementptr inbounds {elem_type}, {elem_type} addrspace({addrspace})* {cast_var}, i64 {offset}"
+                )
+
+                arg_var = base_var
+                arg_ptr_ty = f"{elem_type} addrspace({addrspace})*"
+                if sg_m:
+                    typed_ptr = simdgroup_typed_ptr(sg_m.group(1))
+                    if typed_ptr:
+                        typed_var = f"%smem_call_gep_typed_{cast_idx - 1}"
+                        new_lines.append(f"{indent}{typed_var} = bitcast {arg_ptr_ty} {base_var} to {typed_ptr}")
+                        arg_var = typed_var
+                        arg_ptr_ty = typed_ptr
+
+                new_lines.append(constexpr_gep.sub(f"{arg_ptr_ty} {arg_var}", line, count=1))
+                continue
+
+        # case 2: @global_smem passed directly as ptr addrspace(N) arg in simdgroup call
+        if sg_m:
+            dm = direct_global_smem.search(line)
+            if dm:
+                addrspace = dm.group(1)
+                typed_ptr = simdgroup_typed_ptr(sg_m.group(1))
+                if typed_ptr:
+                    cast_var = f"%smem_call_direct_cast_{cast_idx}"
+                    cast_idx += 1
+                    new_lines.append(
+                        f"{indent}{cast_var} = bitcast {global_smem_type} addrspace({addrspace})* @global_smem to {typed_ptr}"
+                    )
+                    new_lines.append(direct_global_smem.sub(f"{typed_ptr} {cast_var}", line, count=1))
+                    continue
+
+        new_lines.append(line)
+
     return "\n".join(new_lines)
 
 
@@ -606,6 +769,10 @@ def convert_opaque_ptrs_to_typed(ir: str) -> str:
 
     # rewrite ptrs to include types
     ir = rewrite_ptrs(ir)
+
+    # materialize constant-expression GEPs off @global_smem into real instructions
+    ir = insert_bitcast_for_global_smem_gep(ir)
+    ir = insert_bitcast_for_global_smem_call(ir)
 
     getelementptr_type_dict = generate_getelementptr_type_dict(ir)
 
