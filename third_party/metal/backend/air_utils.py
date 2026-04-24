@@ -2,6 +2,19 @@ import re
 
 
 def rewrite_ptrs(ir: str) -> str:
+    # nuw flag not supported
+    # prev: getelementptr inbounds nuw (...)
+    # new:  getelementptr inbounds (...)
+    ir = re.sub(r"getelementptr inbounds nuw \(", "getelementptr inbounds (", ir)
+
+    # prev: getelementptr inbounds (i8, ptr addrspace(3) @global_smem, i64 16384)
+    # new: getelementptr inbounds (i8, i8 addrspace(3)* @global_smem, i64 16384)
+    ir = re.sub(
+        r"(getelementptr(?:\s+inbounds)?)\s+\((<\d+\s+x\s+\w+>|\w+),\s+ptr\s+addrspace\((\d+)\)",
+        lambda m: f"{m.group(1)} ({m.group(2)}, {m.group(2)} addrspace({m.group(3)})*",
+        ir,
+    )
+
     # prev: getelementptr float, ptr addrspace(1) %0, i64 %9
     # new: getelementptr float, float addrspace(1)* %0, i64, %9
     ir = re.sub(
@@ -275,6 +288,60 @@ def modify_func_signature(ir: str, ptr_type_dict: dict) -> str:
     return ir
 
 
+_AIR_ELEM_TYPE_MAP = {
+    "f16": "half",
+    "f32": "float",
+    "f64": "double",
+    "i8": "i8",
+    "i16": "i16",
+    "i32": "i32",
+    "i64": "i64",
+}
+
+
+def rewrite_air_simdgroup_decl_ptrs(ir: str) -> str:
+    """Rewrite opaque ptr to typed ptr in air.simdgroup_matrix_8x8_* declarations
+
+    Elem type and addrspace in function name suffix
+    e.g. @air.simdgroup_matrix_8x8_load.v64f16.p3f16 means ptr type is half addrspace(3)*
+    """
+    # Map func name -> typed ptr
+    func_ptr_type: dict[str, str] = {}
+    for m in re.finditer(
+        r"declare\s+[^@]+@(air\.simdgroup_matrix_8x8_(?:load|store)\.[^(]+)\(",
+        ir,
+    ):
+        func_name = m.group(1).strip()
+        if func_name in func_ptr_type:
+            continue
+        ptr_m = re.search(r"\.p(\d+)(\w+)$", func_name)
+        if not ptr_m:
+            continue
+        addrspace = ptr_m.group(1)
+        elem_suffix = ptr_m.group(2)
+        llvm_type = _AIR_ELEM_TYPE_MAP.get(elem_suffix)
+        if not llvm_type:
+            continue
+        func_ptr_type[func_name] = f"{llvm_type} addrspace({addrspace})*"
+
+    if not func_ptr_type:
+        return ir
+
+    for func_name, typed_ptr in func_ptr_type.items():
+        opaque = f"ptr addrspace({typed_ptr.split('addrspace(')[1].split(')')[0]})"
+        escaped = re.escape(func_name)
+
+        # rewrite declaration, replace opaque ptr wherever it appears in arg list
+        # load has ptr first, store has ptr as second arg
+        ir = re.sub(
+            rf"(declare\s+[^@]+@{escaped}\([^)]*?){re.escape(opaque)}",
+            lambda mo, tp=typed_ptr: mo.group(1) + tp,
+            ir,
+        )
+
+    return ir
+
+
 def rewrite_metadata(ir: str) -> str:
     # rewrite metadata func ptr reference
     # e.g. ptr @funcname → void (arg types)* @funcname
@@ -533,6 +600,9 @@ def convert_opaque_ptrs_to_typed(ir: str) -> str:
         # group(1): type being stored at the ptr
         # group(2): addr space
         ptr_type_dict[m.group(3)] = f"{m.group(1)} addrspace({m.group(2)})*"
+
+    # rewrite opaque ptrs in air.simdgroup_matrix_8x8_* declarations
+    ir = rewrite_air_simdgroup_decl_ptrs(ir)
 
     # rewrite ptrs to include types
     ir = rewrite_ptrs(ir)
