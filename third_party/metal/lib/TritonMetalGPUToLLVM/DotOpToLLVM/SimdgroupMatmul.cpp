@@ -397,7 +397,9 @@ struct DotOpSimdgroupMatmulConversionHelper {
         Type smemCPtrTy =
             LLVM::LLVMPointerType::get(ctx, targetInfo.getSharedAddressSpace());
         Value offsetPtr = b.gep(smemCPtrTy, outputElemTy, smemCPtr, offset);
-        acc[i + ctaRepIdx * elemsPerThread] = b.load(outputElemTy, offsetPtr);
+        auto prevAcc = acc[i + ctaRepIdx * elemsPerThread];
+        auto amountToAdd = b.load(outputElemTy, offsetPtr);
+        acc[i + ctaRepIdx * elemsPerThread] = b.fadd(prevAcc, amountToAdd);
       }
 
       // prevent next iteration from overwriting smem
