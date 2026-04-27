@@ -18,6 +18,10 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
   LogicalResult
   matchAndRewrite(triton::FuncOp funcOp, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    // when adding implicit stride args for tensors, don't want to include the
+    // amended scratch ptrs
+    unsigned numTrueUserArgs = funcOp.getNumArguments();
+
     // Prevent LLVM's inliner to inline this function
     auto amendedFuncOp = amendFuncOp(funcOp, rewriter, targetInfo);
     FailureOr<LLVM::LLVMFuncOp> maybeNewFuncOp =
@@ -36,33 +40,78 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
       auto funcType = newFuncOp.getFunctionType();
       SmallVector<Type> params(funcType.getParams());
       SmallVector<Type> origParams(funcType.getParams());
+      SmallVector<DictionaryAttr> origArgAttrs;
+      newFuncOp.getAllArgAttrs(origArgAttrs);
 
-      // convert scalar user args to ptr addrspace(1)
+      // build up new argAttrs
+      SmallVector<DictionaryAttr> newArgAttrs;
+      auto origNumUserArgs = newFuncOp.getNumArguments();
+
+      // for tensor args, add implicit stride arguments (ptr to vector)
+      SmallVector<Type> paramsWithImplicitStrides;
       {
         auto numUserArgs = newFuncOp.getNumArguments();
         auto globalPtrType = LLVM::LLVMPointerType::get(ctx, 1);
+
         for (unsigned i = 0; i < numUserArgs; i++) {
-          if (!mlir::isa<LLVM::LLVMPointerType>(params[i])) {
-            params[i] = globalPtrType; // scalar -> ptr
-            newFuncOp.setArgAttr(i, "llvm.noundef", rewriter.getUnitAttr());
-            newFuncOp.setArgAttr(i, "llvm.nocapture", rewriter.getUnitAttr());
-            newFuncOp.setArgAttr(i, "llvm.readonly", rewriter.getUnitAttr());
-            newFuncOp.setArgAttr(
-                i, "llvm.dereferenceable",
-                rewriter.getIntegerAttr(IntegerType::get(ctx, 64), 4));
+          if (mlir::isa<LLVM::LLVMPointerType>(params[i]) &&
+              i < numTrueUserArgs) {
+            // tensor arg -> add implicit stride arg
+            auto strideArgType = globalPtrType; // ptr to vector of strides
+            paramsWithImplicitStrides.push_back(params[i]);
+            paramsWithImplicitStrides.push_back(strideArgType);
+            newArgAttrs.push_back(origArgAttrs[i]);
+            NamedAttrList strideAttrs;
+            strideAttrs.set(
+                "metal.implicit_stride_for",
+                rewriter.getI32IntegerAttr(i)); // tracks original ptr arg index
+            newArgAttrs.push_back(DictionaryAttr::get(ctx, strideAttrs));
+          } else {
+            paramsWithImplicitStrides.push_back(params[i]);
+            newArgAttrs.push_back(origArgAttrs[i]);
+          }
+        }
+      }
+
+      newFuncOp.setFunctionType(LLVM::LLVMFunctionType::get(
+          funcType.getReturnType(), paramsWithImplicitStrides));
+
+      // convert scalar user args to ptr addrspace(1)
+      {
+        auto numUserArgsWithImplicitStrides = newFuncOp.getNumArguments();
+        auto globalPtrType = LLVM::LLVMPointerType::get(ctx, 1);
+        for (unsigned i = 0; i < numUserArgsWithImplicitStrides; i++) {
+          if (!mlir::isa<LLVM::LLVMPointerType>(paramsWithImplicitStrides[i])) {
+            paramsWithImplicitStrides[i] = globalPtrType; // scalar -> ptr
+            NamedAttrList attrs;
+            attrs.set("llvm.noundef", rewriter.getUnitAttr());
+            attrs.set("llvm.nocapture", rewriter.getUnitAttr());
+            attrs.set("llvm.readonly", rewriter.getUnitAttr());
+            attrs.set("llvm.dereferenceable",
+                      rewriter.getIntegerAttr(IntegerType::get(ctx, 64), 4));
+            newArgAttrs[i] = DictionaryAttr::get(ctx, attrs);
           }
         }
 
-        newFuncOp.setFunctionType(
-            LLVM::LLVMFunctionType::get(funcType.getReturnType(), params));
+        newFuncOp.setFunctionType(LLVM::LLVMFunctionType::get(
+            funcType.getReturnType(), paramsWithImplicitStrides));
 
         // modify first block
+        unsigned insertOffset = 0;
         auto &firstBlock = newFuncOp.getBody().front();
         rewriter.setInsertionPointToStart(&firstBlock);
-        for (unsigned i = 0; i < numUserArgs; i++) {
-          auto arg = firstBlock.getArgument(i);
+
+        // use numTrueUserArgs here to not modify the amended scratch ptr args
+        for (unsigned i = 0; i < numTrueUserArgs; i++) {
+          auto arg = firstBlock.getArgument(
+              i + insertOffset); // account for prior insertions
           if (!mlir::isa<LLVM::LLVMPointerType>(origParams[i])) {
             arg.setType(globalPtrType);
+          } else {
+            unsigned insertIdx = i + 1 + insertOffset;
+            // insert for newly added implicit stride args
+            firstBlock.insertArgument(insertIdx, globalPtrType, arg.getLoc());
+            insertOffset++;
           }
         }
       }
@@ -84,17 +133,14 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
       // TODO set metadata and handle multiple dims
       auto i32Type = IntegerType::get(ctx, 32);
 
-      SmallVector<DictionaryAttr> argAttrs;
-      newFuncOp.getAllArgAttrs(argAttrs);
-
       // add kNumI32ExtraArgs i32 args (num_programs, thread_idx, simdgroup_idx,
       // threadgroup_idx)
       // see MetalKernelArgs.h for layout
       for (int i = 0; i < mlir::triton::metal::kNumI32ExtraArgs; ++i) {
-        params.push_back(i32Type);
+        paramsWithImplicitStrides.push_back(i32Type);
       }
-      newFuncOp.setFunctionType(
-          LLVM::LLVMFunctionType::get(funcType.getReturnType(), params));
+      newFuncOp.setFunctionType(LLVM::LLVMFunctionType::get(
+          funcType.getReturnType(), paramsWithImplicitStrides));
 
       // first entry block receives args from function params
       // so need to add additional params to first entry block
@@ -105,9 +151,9 @@ struct FuncOpConversion : public ConvertOpToLLVMPattern<triton::FuncOp> {
       auto argAttr = DictionaryAttr::get(ctx, {noundef});
       for (int i = 0; i < mlir::triton::metal::kNumI32ExtraArgs; ++i) {
         region.addArgument(i32Type, loc);
-        argAttrs.push_back(argAttr);
+        newArgAttrs.push_back(argAttr);
       }
-      newFuncOp.setAllArgAttrs(argAttrs);
+      newFuncOp.setAllArgAttrs(newArgAttrs);
     } else {
       newFuncOp.setPassthroughAttr(
           ArrayAttr::get(ctx, rewriter.getStringAttr("noinline")));
