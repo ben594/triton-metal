@@ -126,49 +126,26 @@ struct SimdgroupAsyncCopyOpConversion
     // get layout from src tensor encoding
     auto srcEnc =
         cast<triton::gpu::BlockedEncodingAttr>(srcTensorTy.getEncoding());
-    auto spt = srcEnc.getSizePerThread(); // elements per thread per dim
-    // use BlockedEncodingAttr's own order/threadsPerWarp (thread layout
-    // within warp) instead of triton::gpu::getOrder() which goes through
-    // LinearEncoding and may return register-based order that differs
-    SmallVector<unsigned> order(srcEnc.getOrder());
-    SmallVector<unsigned> tpw(srcEnc.getThreadsPerWarp());
-    // order[0] is fastest-varying dim
-    unsigned innerDim = order[0];      // fastest dim (col for row-major src)
-    unsigned outerDim = order[1];      // slowest dim (row)
-    unsigned tpwInner = tpw[innerDim]; // threads along col
-    unsigned tpwOuter = tpw[outerDim]; // threads along row
-    unsigned sptInner = spt[innerDim]; // elems per thread along col
-    unsigned sptOuter = spt[outerDim]; // elems per thread along row
 
-    // get threadId (within entire grid) and simdgroupId (warp id within CTA)
+    // use emitIndices to get thread's element indices, handling all encoding
+    // layouts (warpsPerCTA distribution, order, etc.) correctly
+    auto indices = emitIndices(loc, rewriter, targetInfo, srcEnc, srcTensorTy,
+                               /*withCTAOffset=*/false);
+    // indices[0] gives the (row, col) of this thread's first element
+    Value threadRow = indices[0][0];
+    Value threadCol = indices[0][1];
+
     auto func = rewriter.getInsertionBlock()
                     ->getParent()
                     ->getParentOfType<LLVM::LLVMFuncOp>();
     unsigned numArgs = func.getNumArguments();
-    Value threadIdxInGridVal =
-        func.getArgument(numArgs - mlir::triton::metal::kThreadIdxFromEnd);
     Value simdgroupIdxInThreadgroupVal =
         func.getArgument(numArgs - mlir::triton::metal::kSimdgroupIdxFromEnd);
 
     auto b = TritonLLVMOpBuilder(loc, rewriter);
     auto i32Ty = IntegerType::get(ctx, 32);
-    Value threadIdInGrid =
-        LLVM::TruncOp::create(rewriter, loc, i32Ty, threadIdxInGridVal);
     Value simdgroupIdInThreadgroup = LLVM::TruncOp::create(
         rewriter, loc, i32Ty, simdgroupIdxInThreadgroupVal);
-
-    // threadIdInSimdgroup = threadIdInGrid % (tpwInner * tpwOuter)
-    Value threadsPerWarpTotal = b.i32_val(tpwInner * tpwOuter);
-    Value threadIdInSimdgroup = b.urem(threadIdInGrid, threadsPerWarpTotal);
-
-    // decompose threadIdInSimdgroup into (row, col) coords in simdgroup tile
-    Value laneCol = b.urem(threadIdInSimdgroup, b.i32_val(tpwInner));
-    Value laneRow = b.udiv(threadIdInSimdgroup, b.i32_val(tpwInner));
-
-    Value threadRow =
-        b.add(b.mul(simdgroupIdInThreadgroup, b.i32_val(tpwOuter * sptOuter)),
-              b.mul(laneRow, b.i32_val(sptOuter)));
-    Value threadCol = b.mul(laneCol, b.i32_val(sptInner));
 
     Value stride = adaptor.getStride(); // i32, elements per row of src matrix
     Value threadOffset = b.add(b.mul(threadRow, stride), threadCol);
@@ -191,12 +168,37 @@ struct SimdgroupAsyncCopyOpConversion
     if (dstBase.getType() != p3Ty)
       dstBase = LLVM::AddrSpaceCastOp::create(rewriter, loc, p3Ty, dstBase);
 
+    // Guard: only simdgroup 0 performs async copy to avoid redundant
+    // transfers. Phi node merges real event (simdgroup 0) with a null
+    // placeholder (other simdgroups) so wait op receives an event.
+    auto p0Ty = LLVM::LLVMPointerType::get(ctx, 0);
+    Value isSimdgroup0 = b.icmp_eq(simdgroupIdInThreadgroup, b.i32_val(0));
+    auto *curBlock = rewriter.getInsertionBlock();
+    auto *afterBlock = curBlock->splitBlock(rewriter.getInsertionPoint());
+    afterBlock->addArgument(p0Ty, loc);
+    auto *thenBlock = rewriter.createBlock(afterBlock);
+    auto *elseBlock = rewriter.createBlock(afterBlock);
+
+    // branch based on simdgroup index
+    rewriter.setInsertionPointToEnd(curBlock);
+    LLVM::CondBrOp::create(rewriter, loc, isSimdgroup0, thenBlock, elseBlock);
+
+    // then block (simdgroup 0): perform async copy
+    rewriter.setInsertionPointToStart(thenBlock);
     Operation *parentOp = rewriter.getInsertionBlock()->getParentOp();
     Value event =
         emitAirSimdgroupAsyncCopy2D(rewriter, loc, parentOp, dstBase, srcBase,
                                     adaptor.getStride(), tileShape, elemTy);
+    LLVM::BrOp::create(rewriter, loc, ValueRange{event}, afterBlock);
 
-    rewriter.replaceOp(op, event);
+    // else block (other simdgroups): pass null event
+    rewriter.setInsertionPointToStart(elseBlock);
+    Value nullEvent = LLVM::ZeroOp::create(rewriter, loc, p0Ty);
+    LLVM::BrOp::create(rewriter, loc, ValueRange{nullEvent}, afterBlock);
+
+    // after block: phi merges real event and null
+    rewriter.setInsertionPointToStart(afterBlock);
+    rewriter.replaceOp(op, afterBlock->getArgument(0));
     return success();
   }
 
