@@ -33,7 +33,7 @@ The driver loads the Metal kernel at runtime from Triton's on-disk cache and cac
 ## Progress
 - [x] `01-vector-add`
 - [x] `02-fused-softmax`
-- [x] `03-matrix-multiplication` (works but performance not good)
+- [x] `03-matrix-multiplication` (works but performance not good, see notes below)
 - [x] `04-low-memory-dropout`
 - [x] `05-layer-norm` (compiles and runs but may have numerical precision issues)
 
@@ -45,7 +45,16 @@ So far, the Metal backend is pretty bare and does not have any specific optimiza
 
 - `02-fused-softmax` performance beats the naive PyTorch kernel on `mps` backend, and is on par with `torch.softmax`.
 
-- `03-matrix-multiplication` works but performance is worse than PyTorch on `mps`, probably due to no SIMD optimization for dot product.
+- `03-matrix-multiplication` works but performance is worse than PyTorch on `mps`.
+  - Third attempt: use AIR simdgroup intrinsics with async copy
+    - no staging in threadgroup memory
+    - 5x faster than second attempt and ~2x slower than mps
+    - seems unstable especially when pointer arithmetic is used in the original Triton kernel, because stride info is not available (already programmed into the ptr arithmetic)
+    - still have correctness issues if input shapes do not align with tiles, need to implement masking for stores
+  - Second attempt: use AIR simdgroup intrinsics
+    - stage input and output tiles in threadgroup memory, around 3x faster than scalar FMA and 10x slower than mps
+  - Initial implementation: simple scalar FMA
+    - around 30x slower than mps
 
 - `05-layer-norm` compiles and runs, but there is one assertion that fails depending on the input. The error is just slightly larger than the threshold, so this may be due to some floating point precision issues.
 
