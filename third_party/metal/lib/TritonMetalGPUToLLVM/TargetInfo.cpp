@@ -34,7 +34,7 @@ void TargetInfo::clusterBarrier(Location loc, RewriterBase &rewriter) const {
 }
 
 void TargetInfo::warpSync(Location loc, RewriterBase &rewriter) const {
-  llvm_unreachable("not implemented");
+  // llvm_unreachable("not implemented");
 }
 
 void TargetInfo::storeDShared(RewriterBase &rewriter, Location loc, Value ptr,
