@@ -87,7 +87,8 @@ class MetalBackend(BaseBackend):
         pm = ir.pass_manager(mod.context)
         pm.enable_debug()
 
-        # TODO insert passes
+        metal.passes.ttgpuir.add_inject_tensor_stride_args(pm)
+        metal.passes.ttgpuir.add_prepare_simdgroup_matmul(pm)
         pm.run(mod, "make_ttgir")
         metadata["tensordesc_meta"] = mod.get_tensordesc_metadata()
         return mod
@@ -239,8 +240,7 @@ class MetalBackend(BaseBackend):
         return {"min_dot_size": get_min_dot_size(self.target)}
 
     def load_dialects(self, context):
-        # TODO no dialects for now, add if needed
-        pass
+        metal.load_dialects(context)
 
     def get_module_map(self) -> dict:
         # TODO no additional modules for now, add if needed

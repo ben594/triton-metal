@@ -1229,6 +1229,48 @@ This simplifies both WMMA and dotOperand layouts lowering to linear layout.
   }];
 }
 
+def MetalMfmaEncodingAttr : DistributedEncoding<"MetalMfmaEncoding", "metal_mfma_encoding", [MmaEncodingTrait]> {
+  let mnemonic = "metal_mfma";
+
+  let description = [{
+Encoding for tensors produced by Apple Metal simdgroup matrix multiply-accumulate.
+Each simdgroup (32 threads) computes one 8x8 output tile.
+
+Parameters:
+- `warpsPerCTA`: simdgroup layout in threadgroup [M-warps, N-warps]
+- `instrShape`: {8, 8, 8} (M, N, K)
+- `CGALayout`: identity/unit for Metal, no multi-block clusters)
+
+Per-thread layout in 8x8 tile (32 threads, 2 elems each):
+  thread lane owns: row = lane % 8,  col = (lane / 8) * 2 + reg  (reg in {0,1})
+  }];
+
+  let parameters = (ins
+    ArrayRefParameter<"unsigned">:$warpsPerCTA,
+    ArrayRefParameter<"unsigned">:$instrShape,
+    "CGAEncodingAttr":$CGALayout
+  );
+
+  let builders = [
+    AttrBuilder<(ins "ArrayRef<unsigned>":$warpsPerCTA,
+                     "CGAEncodingAttr":$CGALayout,
+                     CArg<"ArrayRef<unsigned>", "{}">:$instrShape), [{
+      SmallVector<unsigned> shape(instrShape);
+      if (shape.empty())
+        shape = {8u, 8u, 8u};
+      return $_get($_ctxt, warpsPerCTA, shape, CGALayout);
+    }]>
+  ];
+
+  let genVerifyDecl = 1;
+  let hasCustomAssemblyFormat = 1;
+  let skipDefaultBuilders = 1;
+
+  let extraClassDeclaration = extraDistributedDeclaration # [{
+    SmallVector<unsigned> getRepOrderForOperand(int opIdx) const;
+  }];
+}
+
 def NvidiaMmaEncodingAttr : DistributedEncoding<"NvidiaMmaEncoding", "nvidia_mma_encoding", [MmaEncodingTrait]> {
   let mnemonic = "nvidia_mma";
 

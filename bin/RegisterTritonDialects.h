@@ -1,6 +1,8 @@
 #pragma once
 #include "amd/include/Dialect/TritonAMDGPU/IR/Dialect.h"
 #include "amd/include/TritonAMDGPUTransforms/Passes.h"
+#include "metal/include/Dialect/TritonMetalGPU/IR/Dialect.h"
+#include "metal/include/TritonMetalGPUTransforms/Passes.h"
 #include "nvidia/include/Dialect/NVGPU/IR/Dialect.h"
 #include "nvidia/include/Dialect/NVWS/IR/Dialect.h"
 #include "proton/Dialect/include/Conversion/ProtonGPUToLLVM/Passes.h"
@@ -22,6 +24,7 @@
 #include "TritonAMDGPUTransforms/TritonGPUConversion.h"
 
 #include "TritonMetalGPUToLLVM/Passes.h"
+#include "TritonMetalGPUTransforms/Passes.h"
 
 #include "triton/Dialect/Triton/Transforms/Passes.h"
 #include "triton/Dialect/TritonGPU/Transforms/Passes.h"
@@ -108,6 +111,9 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
   
   // TritonMetalGPUToLLVM passes
   mlir::triton::registerConvertTritonMetalGPUToLLVM();
+  // mlir::registerTritonMetalGPUAccelerateMatmul();
+  mlir::registerTritonMetalGPUInjectTensorStrideArgs();
+  mlir::registerTritonMetalGPUPrepareSimdgroupMatmul();
 
   mlir::ub::registerConvertUBToLLVMInterface(registry);
   mlir::registerConvertNVVMToLLVMInterface(registry);
@@ -170,6 +176,7 @@ inline void registerTritonDialects(mlir::DialectRegistry &registry) {
       mlir::gpu::GPUDialect, mlir::LLVM::LLVMDialect, mlir::NVVM::NVVMDialect,
       mlir::triton::nvgpu::NVGPUDialect, mlir::triton::nvws::NVWSDialect,
       mlir::triton::amdgpu::TritonAMDGPUDialect,
+      mlir::triton::metalgpu::TritonMetalGPUDialect,
       mlir::triton::proton::ProtonDialect,
       mlir::triton::proton::gpu::ProtonGPUDialect, mlir::ROCDL::ROCDLDialect,
       mlir::triton::gluon::GluonDialect>();

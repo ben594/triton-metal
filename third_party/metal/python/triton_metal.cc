@@ -1,5 +1,8 @@
+#include "Dialect/TritonMetalGPU/IR/Dialect.h"
 #include "TritonMetalGPUToLLVM/MetalKernelArgs.h"
 #include "TritonMetalGPUToLLVM/Passes.h"
+#include "TritonMetalGPUTransforms/Passes.h"
+#include "mlir/IR/DialectRegistry.h"
 #include "mlir/Pass/PassManager.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Module.h"
@@ -15,6 +18,15 @@ void init_triton_metal_passes_ttgpuir(py::module &&m) {
   using namespace mlir::triton;
   m.def("add_to_llvmir", [](mlir::PassManager &pm, const std::string &arch) {
     pm.addPass(mlir::triton::createConvertTritonMetalGPUToLLVMPass(arch));
+  });
+  // m.def("add_accelerate_matmul", [](mlir::PassManager &pm) {
+  //   pm.addPass(mlir::createTritonMetalGPUAccelerateMatmul());
+  // });
+  m.def("add_inject_tensor_stride_args", [](mlir::PassManager &pm) {
+    pm.addPass(mlir::createTritonMetalGPUInjectTensorStrideArgs());
+  });
+  m.def("add_prepare_simdgroup_matmul", [](mlir::PassManager &pm) {
+    pm.addPass(mlir::createTritonMetalGPUPrepareSimdgroupMatmul());
   });
 }
 
@@ -187,6 +199,13 @@ void init_triton_metal(py::module &&m) {
 
   auto passes = m.def_submodule("passes");
   init_triton_metal_passes_ttgpuir(passes.def_submodule("ttgpuir"));
+
+  m.def("load_dialects", [](mlir::MLIRContext &context) {
+    mlir::DialectRegistry registry;
+    registry.insert<mlir::triton::metalgpu::TritonMetalGPUDialect>();
+    context.appendDialectRegistry(registry);
+    context.loadAllAvailableDialects();
+  });
 
   m.def("add_kernel_metadata",
         [](llvm::Module *mod) { addAirKernelMetadata(mod); });

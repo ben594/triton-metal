@@ -36,10 +36,27 @@ void populateBarrierOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
                                      RewritePatternSet &patterns,
                                      PatternBenefit benefit);
 
-void populateDotOpToLLVMPatterns(LLVMTypeConverter &typeConverter,
-                                 RewritePatternSet &patterns,
-                                 ModuleAxisInfoAnalysis &axisInfoAnalysis,
-                                 PatternBenefit benefit);
+void populateDotOpToLLVMPatterns(
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    ModuleAxisInfoAnalysis &axisInfoAnalysis,
+    const DenseMap<int, std::array<Operation *, 2>> &dotAllocOps,
+    const TargetInfo &targetInfo, PatternBenefit benefit);
+
+void populateSimdgroupAsyncCopyOpToLLVMPatterns(
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    const mlir::triton::metal::TargetInfo &targetInfo, PatternBenefit benefit);
+
+void populateSimdgroupWaitOpToLLVMPatterns(
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    const mlir::triton::metal::TargetInfo &targetInfo, PatternBenefit benefit);
+
+void populateSimdgroupMMAOpToLLVMPatterns(
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    const mlir::triton::metal::TargetInfo &targetInfo, PatternBenefit benefit);
+
+void populateSimdgroupStoreOpToLLVMPatterns(
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns,
+    const mlir::triton::metal::TargetInfo &targetInfo, PatternBenefit benefit);
 
 } // namespace mlir::triton::metal
 

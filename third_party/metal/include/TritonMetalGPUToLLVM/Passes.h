@@ -27,6 +27,7 @@ namespace mlir::triton {
 std::unique_ptr<OperationPass<ModuleOp>>
 createConvertTritonMetalGPUToLLVMPass(StringRef targetArch);
 
+
 #define GEN_PASS_REGISTRATION
 #include "TritonMetalGPUToLLVM/Passes.h.inc"
 

@@ -1,0 +1,11 @@
+set(MLIR_BINARY_DIR ${CMAKE_BINARY_DIR})
+
+set(LLVM_TARGET_DEFINITIONS TritonMetalGPUOps.td)
+mlir_tablegen(Dialect.h.inc -gen-dialect-decls -dialect=metalg)
+mlir_tablegen(Dialect.cpp.inc -gen-dialect-defs -dialect=metalg)
+mlir_tablegen(OpsConversions.inc -gen-llvmir-conversions)
+mlir_tablegen(Ops.h.inc -gen-op-decls)
+mlir_tablegen(Ops.cpp.inc -gen-op-defs)
+add_mlir_doc(TritonMetalGPUDialect TritonMetalGPUDialect dialects/ -gen-dialect-doc -dialect=metalg)
+add_mlir_doc(TritonMetalGPUOps TritonMetalGPUOps dialects/ -gen-op-doc -dialect=metalg)
+add_public_tablegen_target(TritonMetalGPUTableGen)
