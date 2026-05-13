@@ -33,7 +33,7 @@ The driver loads the Metal kernel at runtime from Triton's on-disk cache and cac
 ## Progress
 - [x] `01-vector-add`
 - [x] `02-fused-softmax`
-- [x] `03-matrix-multiplication` (works but performance not good, see notes below)
+- [x] `03-matrix-multiplication` (performance not good and some correctness issues with masking depending on the input/block sizes, see notes below)
 - [x] `04-low-memory-dropout`
 - [x] `05-layer-norm` (compiles and runs but may have numerical precision issues)
 
@@ -45,7 +45,7 @@ So far, the Metal backend is pretty bare and does not have any specific optimiza
 
 - `02-fused-softmax` performance beats the naive PyTorch kernel on `mps` backend, and is on par with `torch.softmax`.
 
-- `03-matrix-multiplication` works but performance is worse than PyTorch on `mps`.
+- `03-matrix-multiplication` works but performance is worse than PyTorch on `mps`, and there are some correctness issues with masking the store operation.
   - Third attempt: use AIR simdgroup intrinsics with async copy
     - no staging in threadgroup memory
     - 5x faster than second attempt and ~2x slower than mps
@@ -65,6 +65,8 @@ So far, the Metal backend is pretty bare and does not have any specific optimiza
 ## Current Limitations
 - The Metal backend has currently only been tested on Macbook Pro with M1 Pro chip. Some parameters may be hardcoded, and this backend is not guaranteed to work for newer chips or other versions of MacOS/Metal.
 - Only 1D grids supported currently.
+- **Typed vs opaque pointers in LLVM IR:** Not sure how this plays out on other versions of Metal or MacOS, but the kernel needs typed pointers for the Metal JIT compiler to work. If opaque pointers are used, the `metallib` can be generated, but when the kernel is loaded at runtime, it fails.
+  - The version of LLVM that Triton includes seems to only  support opaque pointers, so [air_utils.py](/third_party/metal/backend/air_utils.py) is used to rewrite LLVM IR using typed pointers. This file is currently a mess and many things are handled on a case-by-case basis as I run into problems. Maybe there is a better way to determine the types of every opaque pointer.
 
 **_END OF METAL BACKEND README, ORIGINAL README IS BELOW_**
 
